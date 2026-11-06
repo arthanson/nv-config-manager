@@ -26,7 +26,6 @@ from nv_config_manager_installer.schema import (
 )
 
 PROVIDER_NAME = "nautobot-2x"
-JOBS_PVC_NAME = "nautobot-custom-jobs"
 TOKEN_SECRET_NAME = "nautobot-token"
 
 

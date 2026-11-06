@@ -425,7 +425,7 @@ spec:
       {{- include "nv-config-manager.podSecurityContext" . | nindent 6 }}
       initContainers:
       # Wait for dependencies before running direct template update renders.
-      {{- if .Values.dcim.readiness.enabled }}
+      {{- if include "nv-config-manager.dcimWaitEnabled" . }}
       {{- include "nv-config-manager.waitForDCIM" . | nindent 6 }}
       {{- end }}
       {{- include "nv-config-manager.waitForRedis" . | nindent 6 }}

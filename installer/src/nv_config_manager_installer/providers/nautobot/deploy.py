@@ -22,23 +22,22 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from nv_config_manager_installer.deployer import DeployStep, StepStatus
+from nv_config_manager_installer.deployer import CONTENT_IGNORE_PATTERNS, DeployStep, StepStatus
 from nv_config_manager_installer.nautobot_jobs import NautobotJobRunner
 from nv_config_manager_installer.providers.api import (
     DeployStepsContribution,
     ProviderDeployContext,
 )
 from nv_config_manager_installer.providers.nautobot.settings import (
-    JOBS_PVC_NAME,
     NautobotSettings,
     nautobot_settings,
 )
 from nv_config_manager_installer.pvc_updater import (
     CONTENT_HASH_ANNOTATION,
     CUSTOM_JOBS_PACKAGE_MARKER,
+    JOBS_PVC_NAME,
 )
 
-_IGNORE_COMMON = (".venv", "__pycache__", ".git", "*.pyc")
 _JOBS_CHANGED = "jobs_changed"
 _LOADER_POD = "nv-config-manager-jobs-loader"
 
@@ -139,7 +138,7 @@ def setup_jobs_pvc(ctx: ProviderDeployContext) -> None:
                     src,
                     staging / src.name,
                     dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns(*_IGNORE_COMMON),
+                    ignore=shutil.ignore_patterns(*CONTENT_IGNORE_PATTERNS),
                 )
 
         tarball = Path(tmpdir) / "jobs.tar.gz"

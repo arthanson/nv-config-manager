@@ -315,7 +315,9 @@ def test_null_requirement_removes_the_builtin_provider_rule() -> None:
     The scheduler host is provider-neutral, so it then runs builtin.backup against
     the configured DCIM provider rather than skipping it, and waits for it.
     """
-    deployment = _scheduler_deployment(_render(*_NON_NAUTOBOT, f"{_BACKUP_REQUIREMENT}=null"))
+    deployment = _scheduler_deployment(
+        _render(*_NON_NAUTOBOT, f"{_BACKUP_REQUIREMENT}=null", "dcim.readiness.path=/login/")
+    )
 
     assert _selected_schedulers(deployment) == "builtin.backup"
     assert "wait-for-dcim" in _init_container_names(deployment)

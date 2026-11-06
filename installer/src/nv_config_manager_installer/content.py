@@ -26,7 +26,11 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
+from nv_config_manager_installer.providers.nautobot.settings import nautobot_settings
+from nv_config_manager_installer.schema import (
+    BUILT_IN_NAUTOBOT_PROVIDER,
+    NVConfigManagerInstallConfig,
+)
 
 # Directories to exclude when copying job/template content
 _EXCLUDE_DIRS = {".venv", "__pycache__", ".git", "node_modules", ".mypy_cache", ".ruff_cache"}
@@ -62,9 +66,10 @@ def _extract_tarball(tarball: Path, dest: Path) -> None:
 
 
 def _job_paths(config: NVConfigManagerInstallConfig) -> list[str]:
-    """Return custom job paths declared under ``dcim.settings.jobs``."""
-    entries = config.dcim.settings.get("jobs") or []
-    return [str(entry.get("path", "")) for entry in entries if isinstance(entry, dict)]
+    """Return the bundled Nautobot provider's custom job paths; other providers have none."""
+    if config.dcim.provider != BUILT_IN_NAUTOBOT_PROVIDER:
+        return []
+    return [job.path for job in nautobot_settings(config).jobs if job.path]
 
 
 def stage_jobs(config: NVConfigManagerInstallConfig, staging_dir: Path) -> Path:

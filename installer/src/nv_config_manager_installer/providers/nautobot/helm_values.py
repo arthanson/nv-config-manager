@@ -19,10 +19,8 @@ from __future__ import annotations
 from typing import Any
 
 from nv_config_manager_installer.helm_values import cnpg_cluster_values
-from nv_config_manager_installer.providers.nautobot.settings import (
-    JOBS_PVC_NAME,
-    NautobotSettings,
-)
+from nv_config_manager_installer.providers.nautobot.settings import NautobotSettings
+from nv_config_manager_installer.pvc_updater import JOBS_PVC_NAME
 from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
 
 LOCAL_SERVER = "http://nautobot-nv-config-manager"

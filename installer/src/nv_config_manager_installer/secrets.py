@@ -57,7 +57,7 @@ _NATS_CONFIG_PASSWORD_MIN_LENGTH = 16
 REQUIRED_SITE_SECRET_KEYS = ("root_password_r1", "api_user_key_r1")
 
 
-def _validate_nats_config_password(password: str) -> str:
+def validate_nats_config_password(password: str) -> str:
     """Validate a password used in unquoted NATS config variable expansion."""
     if len(password) < _NATS_CONFIG_PASSWORD_MIN_LENGTH:
         raise ValueError(f"natsPassword must be at least {_NATS_CONFIG_PASSWORD_MIN_LENGTH} chars")
@@ -68,7 +68,7 @@ def _validate_nats_config_password(password: str) -> str:
     return password
 
 
-def _generate_password(length: int = 32) -> str:
+def generate_password(length: int = 32) -> str:
     """Generate a random password using only sha512_crypt-safe characters [a-zA-Z0-9./]."""
     return "".join(secrets.choice(_CRYPT_SAFE_CHARS) for _ in range(length))
 
@@ -78,16 +78,16 @@ def _generate_url_safe_password(length: int = 32) -> str:
     return "".join(secrets.choice(_URL_SAFE_CHARS) for _ in range(length))
 
 
-def _generate_nats_config_password(length: int = 32) -> str:
+def generate_nats_config_password(length: int = 32) -> str:
     """Generate a password safe for unquoted NATS config variable expansion."""
     if length < _NATS_CONFIG_PASSWORD_MIN_LENGTH:
         raise ValueError(f"length must be at least {_NATS_CONFIG_PASSWORD_MIN_LENGTH}")
     first = secrets.choice(_NATS_CONFIG_PASSWORD_FIRST_CHARS)
     rest = "".join(secrets.choice(_NATS_CONFIG_PASSWORD_CHARS) for _ in range(length - 1))
-    return _validate_nats_config_password(f"{first}{rest}")
+    return validate_nats_config_password(f"{first}{rest}")
 
 
-def _generate_token(length: int = 40) -> str:
+def generate_token(length: int = 40) -> str:
     """Generate a random hex token."""
     return secrets.token_hex((length + 1) // 2)[:length]
 
@@ -98,9 +98,9 @@ def _generate_redfish_secrets(config: NVConfigManagerInstallConfig, state: dict[
         return
     for vendor, creds in config.redfish.vendors.items():
         state[f"redfish_{vendor}_default_user"] = creds.default_user or "local-mock-user"
-        state[f"redfish_{vendor}_default_password"] = creds.default_password or _generate_password()
+        state[f"redfish_{vendor}_default_password"] = creds.default_password or generate_password()
         state[f"redfish_{vendor}_config_manager_password"] = (
-            creds.config_manager_password or _generate_password()
+            creds.config_manager_password or generate_password()
         )
 
 
@@ -129,9 +129,9 @@ def _generate_core_k8s_secrets(
         state["nats_password"] = nats_password
     provider.generate_secret_state(config, state, _v)
 
-    state.setdefault("dcim_token", _generate_token(40))
-    state["nats_password"] = _validate_nats_config_password(
-        state.get("nats_password") or _generate_nats_config_password()
+    state.setdefault("dcim_token", generate_token(40))
+    state["nats_password"] = validate_nats_config_password(
+        state.get("nats_password") or generate_nats_config_password()
     )
     state["redis_password"] = _v("redis", "password") or _generate_url_safe_password()
     for db in application_databases(provider):
@@ -146,7 +146,7 @@ def _generate_optional_k8s_secrets(
     """Populate optional integration secrets (Slack, Jira, CNPG backup)."""
     k8s = config.secrets.k8s
     if config.sso.enabled:
-        state["oidc_cookie_secret"] = _generate_token(32)
+        state["oidc_cookie_secret"] = generate_token(32)
     if k8s.slack.enabled:
         state["slack_token"] = _v("slack", "token") or _generate_url_safe_password()
     if k8s.jira.enabled:
@@ -194,7 +194,7 @@ def generate_secrets(
         )
         configured_network_keys.add(full_key)
         if entry.source == PasswordSource.GENERATE:
-            state[full_key] = _generate_password()
+            state[full_key] = generate_password()
         elif entry.source == PasswordSource.MANUAL:
             if not entry.value.strip():
                 raise ValueError(
@@ -204,7 +204,7 @@ def generate_secrets(
             state[full_key] = entry.value
 
     # -- Hash salt --
-    state["hash_salt"] = _generate_password(8)
+    state["hash_salt"] = generate_password(8)
 
     # These values are used by every NVCM site.  The TUI normally creates
     # their entries, but keep non-interactive ESO runs safe as well.  Do not
@@ -212,7 +212,7 @@ def generate_secrets(
     # verifies that it already exists at the site's configured path.
     for key in REQUIRED_SITE_SECRET_KEYS:
         if key not in configured_network_keys:
-            state[key] = _generate_password()
+            state[key] = generate_password()
 
     if config.secrets.method != SecretsMethod.KUBERNETES:
         return state
@@ -252,8 +252,8 @@ def build_openbao_secret_data(
             "user": value("network", "user") or config.secrets.config_manager_service_username,
             "password": value("network", "password") or _generate_url_safe_password(),
         },
-        "dcim": {"token": value("dcim", "token") or _generate_token(40)},
-        "nats": {"password": value("nats", "password") or _generate_nats_config_password()},
+        "dcim": {"token": value("dcim", "token") or generate_token(40)},
+        "nats": {"password": value("nats", "password") or generate_nats_config_password()},
     }
     groups.update(provider.openbao_groups(config, value))
     if not config.dcim.local:
@@ -317,8 +317,8 @@ def build_openbao_secret_data(
             redfish[f"{vendor}DefaultUser"] = default_user or (
                 "USERID" if vendor == "lenovo" else "admin"
             )
-            redfish[f"{vendor}DefaultPassword"] = default_password or _generate_password()
-            redfish[f"{vendor}ConfigManagerPassword"] = manager_password or _generate_password()
+            redfish[f"{vendor}DefaultPassword"] = default_password or generate_password()
+            redfish[f"{vendor}ConfigManagerPassword"] = manager_password or generate_password()
         groups["redfish"] = redfish
         default_creds = config.redfish.vendors.get("default")
         groups["bmc"] = {
@@ -333,7 +333,7 @@ def build_openbao_secret_data(
                         "password": (
                             default_creds.default_password
                             if default_creds and default_creds.default_password
-                            else _generate_password()
+                            else generate_password()
                         ),
                     }
                 }

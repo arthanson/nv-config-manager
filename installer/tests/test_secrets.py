@@ -146,11 +146,11 @@ class TestGenerateSecrets:
     def test_generated_nats_password_is_safe_for_unquoted_nats_config_variable(self, monkeypatch):
         monkeypatch.setattr(secrets_module.secrets, "choice", lambda alphabet: alphabet[-1])
 
-        assert secrets_module._generate_nats_config_password(16) == "Z" + ("9" * 15)
+        assert secrets_module.generate_nats_config_password(16) == "Z" + ("9" * 15)
 
     def test_generated_nats_password_rejects_too_short_lengths(self):
         with pytest.raises(ValueError, match="length must be at least 16"):
-            secrets_module._generate_nats_config_password(2)
+            secrets_module.generate_nats_config_password(2)
 
     def test_kubernetes_nats_password_override_must_be_config_safe(self):
         config = NVConfigManagerInstallConfig(

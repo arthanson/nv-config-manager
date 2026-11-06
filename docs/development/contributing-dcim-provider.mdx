@@ -459,8 +459,12 @@ class ExampleInstallerProvider(DCIMInstallerProvider):
 
 `dcim.local` selects where the DCIM runs. When it is true, the provider
 deploys its in-cluster stack from `pre_helm_install` and sets `dcim.server` to
-the in-cluster endpoint. When it is false, `dcim.server` is required and must
-point at an existing instance. `supports_local` and `supports_external` in the
+the in-cluster endpoint. The install stops if the Helm values carry no
+`dcim.server`. When it is false, `dcim.server` is required and must point at
+an existing instance. A configuration that sets `dcim.server` without
+`dcim.local` is treated as external. Dependent pods wait for the DCIM only
+when `helm_values` sets `dcim.readiness.path`. The wait honors `dcim.verify:
+false`. `supports_local` and `supports_external` in the
 metadata gate the "Use external" switch in the TUI, and validation rejects a
 `dcim.local` value the provider does not support. A `SecretGroupSpec` with
 `local_only` gets no Vault values when the DCIM is external. An empty

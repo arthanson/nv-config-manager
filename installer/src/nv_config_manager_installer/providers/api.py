@@ -243,7 +243,11 @@ class DCIMInstallerProvider:
         is_local: bool,
         local_tags: Mapping[str, str] | None,
     ) -> dict[str, Any]:
-        """Return Helm values merged over the installer-generated values."""
+        """Return Helm values merged over the installer-generated values.
+
+        A provider that supports ``dcim.local`` must set ``dcim.server`` to its
+        in-cluster endpoint when ``config.dcim.local`` is true.
+        """
         return {}
 
     # -- deploy --------------------------------------------------------------

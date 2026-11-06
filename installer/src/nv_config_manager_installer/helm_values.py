@@ -29,8 +29,10 @@ import yaml
 
 from nv_config_manager_installer.accounts import build_eso_config_secrets
 from nv_config_manager_installer.providers.api import DCIMInstallerProvider
+from nv_config_manager_installer.providers.errors import InstallerProviderConfigurationError
 from nv_config_manager_installer.providers.registry import resolve_provider
 from nv_config_manager_installer.schema import (
+    BUILT_IN_NAUTOBOT_PROVIDER,
     ExternalPostgresConfig,
     ImageSource,
     LBProvider,
@@ -945,7 +947,7 @@ def _build_rbac(config: NVConfigManagerInstallConfig) -> dict[str, Any]:
 
 def build_values(
     config: NVConfigManagerInstallConfig,
-    _secrets_state: dict[str, str],
+    secrets_state: dict[str, str],
     *,
     provider: DCIMInstallerProvider | None = None,
     local_images: bool = False,
@@ -1119,8 +1121,13 @@ def build_values(
 
     values = _deep_merge(
         values,
-        provider.helm_values(config, _secrets_state, is_local=is_local, local_tags=local_tags),
+        provider.helm_values(config, secrets_state, is_local=is_local, local_tags=local_tags),
     )
+    if config.dcim.provider != BUILT_IN_NAUTOBOT_PROVIDER and not values["dcim"].get("server"):
+        raise InstallerProviderConfigurationError(
+            f'DCIM provider "{config.dcim.provider}" must set dcim.server in its Helm values '
+            "when dcim.local is true"
+        )
     _apply_image_overrides(config, values, provider)
     return values
 

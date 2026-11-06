@@ -26,8 +26,10 @@ from nv_config_manager_installer.providers.api import (
 )
 from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
 from nv_config_manager_installer.secrets import (
-    _generate_password,
-    _generate_token,
+    generate_nats_config_password,
+    generate_password,
+    generate_token,
+    validate_nats_config_password,
 )
 
 _LABEL_API_TOKEN = "API Token"
@@ -94,10 +96,10 @@ def generate_secret_state(
         state["nautobot_read_only_token"] = ro_token
     if config.dcim.local:
         state["nautobot_admin_password"] = (
-            value_of("nautobot_app", "adminPassword") or _generate_password()
+            value_of("nautobot_app", "adminPassword") or generate_password()
         )
         state["django_secret_key"] = value_of("nautobot_app", "djangoSecretKey") or (
-            _generate_password(50)
+            generate_password(50)
         )
         if superuser_token := value_of("nautobot_app", "superuserApiToken"):
             state["superuser_api_token"] = superuser_token
@@ -113,32 +115,30 @@ def token_secret_data(state: Mapping[str, str]) -> dict[str, str]:
 def openbao_groups(
     config: NVConfigManagerInstallConfig,
     value_of: SecretValue,
-    *,
-    nats_password: Callable[[], str],
-    validate_nats_password: Callable[[str], str],
 ) -> dict[str, dict[str, str]]:
     """Return the ``nautobot`` and ``nautobot_app`` OpenBao groups."""
     token = (
         value_of("nautobot", "token")
         or value_of("nautobot_app", "superuserApiToken")
-        or _generate_token(40)
+        or generate_token(40)
     )
     groups: dict[str, dict[str, str]] = {
         "nautobot": {
             "token": token,
-            "readOnlyToken": value_of("nautobot", "readOnlyToken") or _generate_token(40),
-            "natsPassword": validate_nats_password(
-                value_of("nautobot", "natsPassword") or nats_password()
+            "readOnlyToken": value_of("nautobot", "readOnlyToken") or generate_token(40),
+            "natsPassword": validate_nats_config_password(
+                value_of("nautobot", "natsPassword") or generate_nats_config_password()
             ),
-            "natsSysPassword": value_of("nautobot", "natsSysPassword") or nats_password(),
-            "natsNautobotPassword": value_of("nautobot", "natsNautobotPassword") or nats_password(),
+            "natsSysPassword": value_of("nautobot", "natsSysPassword")
+            or generate_nats_config_password(),
+            "natsNautobotPassword": value_of("nautobot", "natsNautobotPassword")
+            or generate_nats_config_password(),
         }
     }
     if config.dcim.local:
         groups["nautobot_app"] = {
-            "adminPassword": value_of("nautobot_app", "adminPassword") or _generate_password(),
-            "djangoSecretKey": value_of("nautobot_app", "djangoSecretKey")
-            or _generate_password(50),
+            "adminPassword": value_of("nautobot_app", "adminPassword") or generate_password(),
+            "djangoSecretKey": value_of("nautobot_app", "djangoSecretKey") or generate_password(50),
             "superuserApiToken": token,
         }
     return groups

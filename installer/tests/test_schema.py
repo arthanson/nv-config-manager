@@ -996,3 +996,27 @@ class TestGitTokenConfig:
         assert loaded.redfish.enabled is True
         assert loaded.redfish.vendors["lenovo"].default_user == "admin"
         assert loaded.redfish.vendors["lenovo"].config_manager_password == "kpw"
+
+
+def test_a_server_without_local_means_external_for_other_providers() -> None:
+    config = NVConfigManagerInstallConfig.model_validate(
+        {"dcim": {"provider": "synthetic", "server": "https://dcim.example.com"}}
+    )
+
+    assert config.dcim.local is False
+    assert config.dcim.server == "https://dcim.example.com"
+
+
+def test_nautobot_server_does_not_change_local() -> None:
+    config = NVConfigManagerInstallConfig.model_validate(
+        {"dcim": {"server": "https://nautobot.example.com"}}
+    )
+
+    assert config.dcim.local is True
+
+
+def test_eso_requires_the_dcim_path_for_a_local_provider() -> None:
+    with pytest.raises(ValueError, match="secrets.vault.paths.dcim.enabled must be true"):
+        NVConfigManagerInstallConfig.model_validate(
+            {"dcim": {"provider": "synthetic", "local": True}, "secrets": {"method": "eso"}}
+        )

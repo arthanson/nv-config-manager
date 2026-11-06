@@ -583,7 +583,8 @@ class DCIMConfig(BaseModel):
     """Provider-neutral DCIM selection, connection, and package settings.
 
     ``local`` deploys the selected provider's in-cluster stack; otherwise
-    ``server`` must point at an existing instance. ``settings`` holds the
+    ``server`` must point at an existing instance. For providers other than the
+    bundled Nautobot, a ``server`` with no ``local`` key means external. ``settings`` holds the
     provider's own options and is validated by the provider's settings model.
     An empty ``token_secret_name`` uses the provider's default Secret name.
     """
@@ -1240,6 +1241,10 @@ class NVConfigManagerInstallConfig(BaseModel):
                 dcim.setdefault("local", services.pop("nautobot"))
             if url := services.pop("external_nautobot_url", ""):
                 dcim.setdefault("server", url)
+        if dcim.get(
+            "provider", BUILT_IN_NAUTOBOT_PROVIDER
+        ) != BUILT_IN_NAUTOBOT_PROVIDER and dcim.get("server"):
+            dcim.setdefault("local", False)
         if dcim.get("provider", BUILT_IN_NAUTOBOT_PROVIDER) == BUILT_IN_NAUTOBOT_PROVIDER:
             content = data.get("content")
             if isinstance(content, dict):
@@ -1270,17 +1275,16 @@ class NVConfigManagerInstallConfig(BaseModel):
             groups = {spec.name: spec for spec in provider.secrets.groups}
             self.secrets.k8s.bind_groups(groups)
             self.secrets.vault.paths.bind_groups(groups)
-        if not self.dcim.local:
-            if not self.dcim.server:
-                raise ValueError("dcim.server is required when dcim.local is false")
-            if (
-                self.secrets.method == SecretsMethod.ESO
-                and self.dcim.provider != BUILT_IN_NAUTOBOT_PROVIDER
-                and not self.secrets.vault.paths.dcim.enabled
-            ):
-                raise ValueError(
-                    "secrets.vault.paths.dcim.enabled must be true for an external DCIM provider with ESO"
-                )
+        if not self.dcim.local and not self.dcim.server:
+            raise ValueError("dcim.server is required when dcim.local is false")
+        if (
+            self.secrets.method == SecretsMethod.ESO
+            and self.dcim.provider != BUILT_IN_NAUTOBOT_PROVIDER
+            and not self.secrets.vault.paths.dcim.enabled
+        ):
+            raise ValueError(
+                "secrets.vault.paths.dcim.enabled must be true for an external DCIM provider with ESO"
+            )
         return self
 
     @model_validator(mode="after")

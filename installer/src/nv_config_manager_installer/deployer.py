@@ -181,7 +181,7 @@ class _RerunState:
 
 
 _CONTENT_HASH_ANNOTATION = "nv-config-manager.nvidia.com/content-sha256"
-_IGNORE_COMMON = (".venv", "__pycache__", ".git", "*.pyc")
+CONTENT_IGNORE_PATTERNS = (".venv", "__pycache__", ".git", "*.pyc")
 _IGNORE_TEMPLATES = (".venv", "__pycache__", ".git", "tests")
 _SKIP_REASON = "Not requested"
 _CI_ENV_VAR = "CI"
@@ -239,7 +239,7 @@ def _is_ci_environment() -> bool:
 
 def _hash_content_dir(
     paths: list[Path],
-    ignore_patterns: tuple[str, ...] = _IGNORE_COMMON,
+    ignore_patterns: tuple[str, ...] = CONTENT_IGNORE_PATTERNS,
 ) -> str:
     """Produce a deterministic SHA-256 of the content that would be uploaded to a PVC.
 
@@ -3154,10 +3154,7 @@ class Deployer:
             "SFTP_PORT": "2222",
             **provider_env,
         }
-        env_lines = "".join(
-            f"    '{key}': '{value.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}',\n"
-            for key, value in env.items()
-        )
+        env_lines = "".join(f"    {key!r}: {value!r},\n" for key, value in env.items())
         return (
             "import os, sys\n"
             "os.environ.update({\n"
@@ -3167,7 +3164,7 @@ class Deployer:
             "    'src/tests/integration/',\n"
             "    '-v',\n"
             "    '--tb=short',\n"
-            f"    '--nv-config-manager-namespace', '{ns}',\n"
+            f"    '--nv-config-manager-namespace', {ns!r},\n"
             "    '--no-header',\n"
             "]))\n"
         )

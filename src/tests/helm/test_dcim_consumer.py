@@ -116,12 +116,25 @@ def test_nautobot_keeps_the_historical_consumer_and_wait_names() -> None:
 
 
 def test_other_providers_get_provider_neutral_names() -> None:
-    text = _render(*_NON_NAUTOBOT)
+    text = _render(*_NON_NAUTOBOT, "dcim.readiness.path=/login/")
     docs = _docs(text)
 
     assert _find(docs, "Deployment", f"{_RENDER}-consumer-dcim") is not None
     assert _find(docs, "Deployment", f"{_RENDER}-consumer-nautobot") is None
     assert "- name: wait-for-dcim" in text
+    assert "--no-check-certificate" not in text
+
+
+def test_other_providers_wait_only_when_a_readiness_path_is_set() -> None:
+    text = _render(*_NON_NAUTOBOT)
+
+    assert "wait-for-dcim" not in text
+
+
+def test_dcim_wait_skips_certificate_checks_when_verify_is_false() -> None:
+    text = _render(*_NON_NAUTOBOT, "dcim.readiness.path=/login/", "dcim.verify=false")
+
+    assert "wget -q -T 10 --no-check-certificate -O-" in text
 
 
 def test_observability_profile_keeps_dcim_consumer_autoscaling() -> None:

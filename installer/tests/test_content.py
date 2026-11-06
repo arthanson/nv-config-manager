@@ -21,7 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from nv_config_manager_installer.content import _extract_tarball
+from nv_config_manager_installer.content import _extract_tarball, _job_paths
+from nv_config_manager_installer.schema import DCIMConfig, NVConfigManagerInstallConfig
 
 
 def test_extract_tarball_rejects_path_traversal(tmp_path: Path) -> None:
@@ -101,3 +102,19 @@ def test_extract_tarball_extracts_valid_file_and_directory(tmp_path: Path) -> No
 
     assert (staging / "plugin").is_dir()
     assert (staging / "plugin/job.py").read_bytes() == file_contents
+
+
+def test_job_paths_skip_empty_paths() -> None:
+    config = NVConfigManagerInstallConfig(
+        dcim=DCIMConfig(settings={"jobs": [{"path": ""}, {"path": "/jobs"}]})
+    )
+
+    assert _job_paths(config) == ["/jobs"]
+
+
+def test_job_paths_are_empty_for_other_providers() -> None:
+    config = NVConfigManagerInstallConfig(
+        dcim=DCIMConfig(provider="synthetic", local=False, server="https://dcim.example.com")
+    )
+
+    assert _job_paths(config) == []

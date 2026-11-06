@@ -350,6 +350,8 @@ class ExternalServicesScreen(Container):
         config.dcim.token_secret_name = ""
         config.dcim.event_stream = ""
         config.dcim.event_subject = ""
+        for groups in (config.secrets.k8s, config.secrets.vault.paths):
+            (groups.__pydantic_extra__ or {}).clear()
 
     def _toggle_nats_fields(self) -> None:
         self.query_one("#ext-nats-fields").display = self.query_one(

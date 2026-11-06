@@ -42,10 +42,6 @@ from nv_config_manager_installer.providers.nautobot.settings import (
 )
 from nv_config_manager_installer.providers.nautobot.tui import IngestDataScreen
 from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
-from nv_config_manager_installer.secrets import (
-    _generate_nats_config_password,
-    _validate_nats_config_password,
-)
 
 _IMAGE_NAME = "nv-config-manager-nautobot"
 
@@ -115,12 +111,7 @@ class NautobotInstallerProvider(DCIMInstallerProvider):
         config: NVConfigManagerInstallConfig,
         value_of: SecretValue,
     ) -> dict[str, dict[str, str]]:
-        return secrets.openbao_groups(
-            config,
-            value_of,
-            nats_password=_generate_nats_config_password,
-            validate_nats_password=_validate_nats_config_password,
-        )
+        return secrets.openbao_groups(config, value_of)
 
     def align_openbao_tokens(
         self,

@@ -60,10 +60,8 @@ dcim:
   cacheTtl: 0
   # Kubernetes secret used by secrets.method=kubernetes. ESO and Vault Agent
   # use secrets.vault.paths.dcim for non-Nautobot providers instead.
-  # Empty name resolves to nautobot-token for nautobot-2x and dcim-token for
-  # other providers.
   tokenSecret:
-    name: ""
+    name: nautobot-token
     key: token
   options: {}
   # Provider-neutral DCIM event stream. Empty values fall back to
@@ -72,7 +70,8 @@ dcim:
     stream: ""
     subject: ""
   # Init containers poll the DCIM server before dependent services start.
-  # Empty path uses /health/ for nautobot-2x and /login/ for other providers.
+  # Empty path uses /health for nautobot-2x; other providers wait only when a
+  # path is set.
   readiness:
     enabled: true
     path: ""
@@ -630,9 +629,9 @@ externalServices:
         archiveConsumer:
           name: nv-config-manager-archive
           deliverySubject: nv-config-manager.archive.delivery
-      # DCIM change-event stream. The deprecated streams.nautobot.* block is
-      # still honored when present: streams.nautobot.* > dcim.events.* >
-      # streams.dcim.*.
+      # DCIM change-event stream. dcim.events.* overrides the stream name and
+      # subject. The deprecated streams.nautobot.* keys still override this
+      # block when present.
       dcim:
         name: nautobot
         # Set to a custom prefix (e.g. "$JS.CUSTOM.API") when the DCIM

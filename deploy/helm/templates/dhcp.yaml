@@ -276,7 +276,7 @@ spec:
       {{- include "nv-config-manager.copyDCIMProviderImages" . | nindent 6 }}
       {{- include "nv-config-manager.installDCIMProviderPackages" . | nindent 6 }}
       # Wait for the DCIM provider to be available before starting refresh
-      {{- if .Values.dcim.readiness.enabled }}
+      {{- if include "nv-config-manager.dcimWaitEnabled" . }}
       {{- include "nv-config-manager.waitForDCIM" . | nindent 6 }}
       {{- end }}
       containers:

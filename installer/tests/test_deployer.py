@@ -2409,3 +2409,13 @@ class TestRedfishSecrets:
 
         secret_names = [call.args[0] for call in mock_k8s.apply_secret.call_args_list]
         assert not any("device-creds" in n for n in secret_names)
+
+
+def test_integration_test_script_quotes_provider_values() -> None:
+    deployer = Deployer(_make_config(), DeployOptions())
+
+    script = deployer._build_test_script("ns'1", "rel", {"DCIM_TOKEN": "a'b\\c\"d"})
+
+    compile(script, "<test-script>", "exec")
+    assert repr("a'b\\c\"d") in script
+    assert repr("ns'1") in script

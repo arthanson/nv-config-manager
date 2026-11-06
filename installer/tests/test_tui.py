@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import Mock, patch
 
 import pytest
@@ -31,6 +32,8 @@ from nv_config_manager_installer.providers.api import (
     DCIMInstallerProvider,
     DeployStepsContribution,
     InstallerProviderMetadata,
+    SecretGroupSpec,
+    SecretsContribution,
     TUIContribution,
 )
 from nv_config_manager_installer.providers.nautobot import NautobotInstallerProvider
@@ -58,8 +61,9 @@ from nv_config_manager_installer.schema import (
 from nv_config_manager_installer.tui.app import NVConfigManagerInstallerApp
 from nv_config_manager_installer.tui.screens.cluster import ClusterScreen
 from nv_config_manager_installer.tui.screens.deploy import DeployScreen
+from nv_config_manager_installer.tui.screens.external_services import ExternalServicesScreen
 from nv_config_manager_installer.tui.screens.network_secrets import NetworkSecretsScreen
-from nv_config_manager_installer.tui.screens.vault import k8s_groups, path_groups
+from nv_config_manager_installer.tui.screens.vault import SecretsScreen, k8s_groups, path_groups
 from nv_config_manager_installer.tui.widgets import LabeledSwitch
 
 
@@ -889,3 +893,63 @@ def test_generic_dcim_and_nats_cards_shown_without_provider_groups() -> None:
 
     assert [f for f, *_ in k8s_groups(provider)][:2] == ["dcim", "nats"]
     assert [f for f, *_ in path_groups(provider)][:2] == ["dcim", "nats"]
+
+
+class _GroupedSyntheticProvider(DCIMInstallerProvider):
+    metadata: ClassVar[InstallerProviderMetadata] = InstallerProviderMetadata(
+        name="synthetic", display_name="Synthetic DCIM", supports_local=False
+    )
+    secrets: ClassVar[SecretsContribution] = SecretsContribution(
+        groups=(
+            SecretGroupSpec(
+                name="synthetic_app",
+                helm_key="syntheticApp",
+                path_suffix="synthetic/app",
+                label="Synthetic App",
+                keys={"adminPassword": "admin_password"},
+                fields=(("adminPassword", "Admin Password"),),
+            ),
+        )
+    )
+
+
+def test_generic_dcim_and_nats_cards_stay_with_provider_groups() -> None:
+    provider = _GroupedSyntheticProvider()
+
+    assert {"dcim", "nats", "synthetic_app"} <= {f for f, *_ in k8s_groups(provider)}
+    assert {"dcim", "nats", "synthetic_app"} <= {f for f, *_ in path_groups(provider)}
+
+
+def test_switching_provider_drops_the_previous_provider_groups() -> None:
+    config = NVConfigManagerInstallConfig()
+    config.secrets.k8s.nautobot.values["token"] = "user-token"
+    config.secrets.vault.paths.nautobot = VaultPathConfig(path="custom/nautobot")
+
+    ExternalServicesScreen._switch_provider(config, "synthetic")
+    config.dcim.local = False
+    config.dcim.server = "https://dcim.example.com"
+
+    reloaded = NVConfigManagerInstallConfig.model_validate(config.model_dump())
+    assert "nautobot" not in (reloaded.secrets.k8s.model_extra or {})
+    assert "nautobot" not in (reloaded.secrets.vault.paths.model_extra or {})
+
+
+@patch("nv_config_manager_installer.tui.screens.vault.OpenBaoClient")
+def test_vault_presence_reads_the_provider_path_suffix(mock_vault_cls, monkeypatch) -> None:
+    monkeypatch.setenv("VAULT_TOKEN", "vault-token")
+    mock_vault_cls.return_value.read_secret.return_value = ({"admin_password": "x"}, 1)
+    config = NVConfigManagerInstallConfig(
+        cluster=ClusterConfig(environment="prod"),
+        dcim=DCIMConfig(provider="synthetic", local=False, server="https://dcim.example.com"),
+        secrets=SecretsConfig(
+            vault=VaultConfig(server="https://vault.example.com", secrets_path="nvcm"),
+        ),
+    )
+    screen = SecretsScreen(config, provider=_GroupedSyntheticProvider())
+
+    presence, error = screen._read_vault_presence()
+
+    assert error is None
+    assert presence is not None and presence["synthetic_app"] == {"adminPassword"}
+    read_paths = [call.args[1] for call in mock_vault_cls.return_value.read_secret.call_args_list]
+    assert "prod/synthetic/app" in read_paths

@@ -172,7 +172,7 @@ class OpenBaoPopulator:
             for field, _helm_key, suffix, keys in vault_path_groups(self.provider)
         }
 
-    def _group_path(self, group: str, mount: str = "") -> str:
+    def _group_path(self, group: str) -> str:
         """Return the configured or default Vault path for *group*."""
         path_config = self.config.secrets.vault.paths.group(group)
         suffix, _keys = self._groups.get(group, (group.replace("_", "-"), {}))
