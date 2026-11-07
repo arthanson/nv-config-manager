@@ -47,6 +47,7 @@ from nv_config_manager_installer.air_sim.orchestrator import (
     OrchestratorCallback,
     SimOrchestrator,
     StepStatus,
+    create_simulation_manager,
 )
 from nv_config_manager_installer.air_sim.provider import AirProviderHooks, AirProviderStatus
 from nv_config_manager_installer.air_sim.proxy import SOCKS_PORT, ProxyInfo
@@ -1284,7 +1285,10 @@ class LaunchScreen(Container):
 
     def validate_provider_config(self) -> str:
         """Return a provider-owned validation error, or an empty string when ready."""
-        return self._hooks().validate_config(self._config)
+        air = self._air()
+        if air is None:
+            return AirProviderHooks().validate_config(self._config)
+        return air.validate_config(self._config)
 
     def _start_bringup(self) -> None:
         if self._config.use_mock_context_for_fabric:
@@ -1334,17 +1338,7 @@ class LaunchScreen(Container):
 
     def create_simulation_manager(self) -> AirSimulationManager:
         """Construct the AIR and remote-host client used by dashboard workers."""
-        manager = AirSimulationManager(
-            ngc_api_key=self._config.ngc_api_key,
-            use_internal=self._config.use_internal,
-            org_id=self._config.org_id,
-            ssh_password=self._config.oob_ssh_password,
-        )
-        hooks = self._hooks()
-        manager.provisioning_probe = lambda host, port: hooks.provisioning_status(
-            manager, host, port
-        )
-        return manager
+        return create_simulation_manager(self._config, self._hooks())
 
     @work(thread=True, group="air_sim_service_logs", exit_on_error=False)
     def _run_monitoring(self, host: str, port: int) -> None:

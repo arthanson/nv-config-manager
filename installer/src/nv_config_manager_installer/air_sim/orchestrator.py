@@ -108,6 +108,18 @@ class _CallbackLogHandler(logging.Handler):
             pass
 
 
+def create_simulation_manager(cfg: SimConfig, hooks: AirProviderHooks) -> AirSimulationManager:
+    """Construct the AIR API/remote-host client with the provider's provisioning probe."""
+    manager = AirSimulationManager(
+        ngc_api_key=cfg.ngc_api_key,
+        use_internal=cfg.use_internal,
+        org_id=cfg.org_id,
+        ssh_password=cfg.oob_ssh_password,
+    )
+    manager.provisioning_probe = lambda host, port: hooks.provisioning_status(manager, host, port)
+    return manager
+
+
 class SimOrchestrator:
     """Run the full DSX Air simulation bringup.
 
@@ -179,17 +191,7 @@ class SimOrchestrator:
 
     def _create_simulation_manager(self, cfg: SimConfig) -> AirSimulationManager:
         """Construct the AIR API/remote-host client used by the orchestration flow."""
-        manager = AirSimulationManager(
-            ngc_api_key=cfg.ngc_api_key,
-            use_internal=cfg.use_internal,
-            org_id=cfg.org_id,
-            ssh_password=cfg.oob_ssh_password,
-        )
-        hooks = self._hooks
-        manager.provisioning_probe = lambda host, port: hooks.provisioning_status(
-            manager, host, port
-        )
-        return manager
+        return create_simulation_manager(cfg, self._hooks)
 
     def _build_deploy_command(self, cfg: SimConfig) -> str:
         """Return the provider installer's remote deployment command."""

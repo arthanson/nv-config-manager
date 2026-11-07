@@ -410,7 +410,7 @@ async def test_switching_provider_rebuilds_provider_sections() -> None:
         screen = app._screens["external_services"]
 
         screen.query_one("#ext-dcim-provider", Select).value = "synthetic"
-        await pilot.pause(0.1)
+        await pilot.pause(0.3)
 
         assert app.provider is not None and app.provider.metadata.name == "synthetic"
         assert "ingest_data" not in app._screens
@@ -419,7 +419,7 @@ async def test_switching_provider_rebuilds_provider_sections() -> None:
         assert config.dcim.settings == {}
 
         screen.query_one("#ext-dcim-provider", Select).value = BUILT_IN_NAUTOBOT_PROVIDER
-        await pilot.pause(0.1)
+        await pilot.pause(0.3)
 
         assert "ingest_data" in app._screens
         labels = [sid for sid, _ in app.section_labels()]
@@ -953,3 +953,46 @@ def test_vault_presence_reads_the_provider_path_suffix(mock_vault_cls, monkeypat
     assert presence is not None and presence["synthetic_app"] == {"adminPassword"}
     read_paths = [call.args[1] for call in mock_vault_cls.return_value.read_secret.call_args_list]
     assert "prod/synthetic/app" in read_paths
+
+
+class _OptionalGroupProvider(DCIMInstallerProvider):
+    metadata: ClassVar[InstallerProviderMetadata] = InstallerProviderMetadata(
+        name="synthetic", display_name="Synthetic DCIM", supports_local=False
+    )
+    secrets: ClassVar[SecretsContribution] = SecretsContribution(
+        groups=(
+            SecretGroupSpec(
+                name="synthetic_extra",
+                helm_key="syntheticExtra",
+                path_suffix="synthetic-extra",
+                label="Synthetic Extra",
+                keys={"apiKey": "api_key"},
+                enabled_default=False,
+                optional=True,
+            ),
+        )
+    )
+
+
+class _ProviderEntryPoint:
+    def __init__(self, name: str, target: type[DCIMInstallerProvider]) -> None:
+        self.name = name
+        self._target = target
+
+    def load(self) -> type[DCIMInstallerProvider]:
+        return self._target
+
+
+def test_switching_provider_binds_the_new_provider_group_defaults(monkeypatch) -> None:
+    installed = [ep for ep in registry._entry_points_for_group() if ep.name != "synthetic"]
+    monkeypatch.setattr(
+        registry,
+        "_entry_points_for_group",
+        lambda: (*installed, _ProviderEntryPoint("synthetic", _OptionalGroupProvider)),
+    )
+    config = NVConfigManagerInstallConfig()
+
+    ExternalServicesScreen._switch_provider(config, "synthetic")
+
+    assert config.secrets.k8s.group("synthetic_extra").enabled is False
+    assert config.secrets.vault.paths.group("synthetic_extra").enabled is False

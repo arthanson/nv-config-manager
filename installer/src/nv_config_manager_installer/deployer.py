@@ -57,7 +57,7 @@ from nv_config_manager_installer.k8s import (
 from nv_config_manager_installer.openbao import OpenBaoClient, OpenBaoPopulator
 from nv_config_manager_installer.operator_versions import load_operator_versions
 from nv_config_manager_installer.providers.api import DCIMInstallerProvider
-from nv_config_manager_installer.providers.registry import resolve_provider
+from nv_config_manager_installer.providers.registry import resolve_provider, validate_provider
 from nv_config_manager_installer.pvc_updater import (
     normalize_ztp_platform,
     validate_ztp_path_component,
@@ -1162,7 +1162,11 @@ class Deployer:
         provider: DCIMInstallerProvider | None = None,
     ) -> None:
         self.config = self.CONFIG_MODEL.model_validate(config.model_dump())
-        self.provider = provider or resolve_provider(self.config)
+        self.provider = (
+            validate_provider(self.config, provider)
+            if provider is not None
+            else resolve_provider(self.config)
+        )
         self.options = options
         self.callback = callback or _NoopCallback()
         self._secrets_state: dict[str, str] = {}

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from functools import cache
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Any
 
@@ -36,11 +37,14 @@ from nv_config_manager_installer.providers.errors import (
     InstallerProviderNotFoundError,
 )
 
+# Type hint only: schema imports this module, so a runtime import is circular.
 if TYPE_CHECKING:
     from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
 
 
+@cache
 def _entry_points_for_group() -> tuple[EntryPoint, ...]:
+    """Return the installer provider entry points, scanned once per process."""
     return tuple(entry_points(group=INSTALLER_DCIM_ENTRY_POINT_GROUP))
 
 
@@ -164,7 +168,13 @@ def provider_secret_groups(provider: DCIMInstallerProvider) -> dict[str, SecretG
 
 def resolve_provider(config: NVConfigManagerInstallConfig) -> DCIMInstallerProvider:
     """Return the configured provider after validating the configuration against it."""
-    provider = get_installer_provider(config.dcim.provider)
+    return validate_provider(config, get_installer_provider(config.dcim.provider))
+
+
+def validate_provider(
+    config: NVConfigManagerInstallConfig, provider: DCIMInstallerProvider
+) -> DCIMInstallerProvider:
+    """Validate the configuration against *provider* and return it."""
     meta = provider.metadata
     if config.dcim.local and not meta.supports_local:
         raise InstallerProviderConfigurationError(

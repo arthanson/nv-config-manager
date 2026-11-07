@@ -42,6 +42,7 @@ from nv_config_manager_installer.providers.registry import (
     installed_provider,
     installer_provider_errors,
     resolve_provider,
+    validate_provider,
 )
 
 __all__ = [
@@ -68,4 +69,5 @@ __all__ = [
     "installer_provider_errors",
     "installed_provider",
     "resolve_provider",
+    "validate_provider",
 ]

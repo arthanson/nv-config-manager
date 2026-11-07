@@ -22,7 +22,11 @@ from textual.widgets import Input, Label, Select
 from textual.widgets.select import InvalidSelectValueError
 
 from nv_config_manager_installer.providers.api import DCIMInstallerProvider
-from nv_config_manager_installer.providers.registry import discover_installer_providers
+from nv_config_manager_installer.providers.registry import (
+    discover_installer_providers,
+    installed_provider,
+    provider_secret_groups,
+)
 from nv_config_manager_installer.schema import (
     ExternalNATSConfig,
     ExternalTemporalConfig,
@@ -313,6 +317,8 @@ class ExternalServicesScreen(Container):
         if event.select.id != "ext-dcim-provider" or not isinstance(event.value, str):
             return
         name = event.value
+        if name not in self._providers:
+            return  # the configured provider is not installed
         self._apply_provider_capabilities(name)
         self._mount_provider_panel(name)
         app = self.app
@@ -352,6 +358,11 @@ class ExternalServicesScreen(Container):
         config.dcim.event_subject = ""
         for groups in (config.secrets.k8s, config.secrets.vault.paths):
             (groups.__pydantic_extra__ or {}).clear()
+        provider = installed_provider(config)
+        if provider is not None:
+            specs = provider_secret_groups(provider)
+            config.secrets.k8s.bind_groups(specs)
+            config.secrets.vault.paths.bind_groups(specs)
 
     def _toggle_nats_fields(self) -> None:
         self.query_one("#ext-nats-fields").display = self.query_one(

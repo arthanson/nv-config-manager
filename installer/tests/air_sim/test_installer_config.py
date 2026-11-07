@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 import yaml
+from pydantic import BaseModel, ConfigDict
 
 from nv_config_manager_installer.air_sim.constants import (
     CONFIG_MANAGER_REMOTE_DIR,
@@ -33,7 +34,12 @@ from nv_config_manager_installer.air_sim.installer_config import (
 from nv_config_manager_installer.air_sim.prebuilt_configs import load_prebuilt_config
 from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
-from nv_config_manager_installer.providers.nautobot.air import NautobotAirHooks, build_content_jobs
+from nv_config_manager_installer.providers.api import AirContribution
+from nv_config_manager_installer.providers.nautobot.air import (
+    LAUNCH_STATUS,
+    NautobotAirHooks,
+    build_content_jobs,
+)
 from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
 from nv_config_manager_installer.secrets import generate_secrets
 
@@ -288,3 +294,16 @@ def test_air_deploy_command_layers_provider_packages_onto_the_installer() -> Non
     overlay = " --find-links '/home/nvcm/provider wheels' --with example-provider "
     assert overlay in command
     assert command.index(overlay) < command.index(" nv-config-manager-installer deploy ")
+
+
+class _StrictAirSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    image_tag: str = ""
+
+
+def test_air_contribution_rejects_unknown_dcim_settings() -> None:
+    air = AirContribution(launch_status=LAUNCH_STATUS, settings_model=_StrictAirSettings)
+
+    assert "dcim_settings is invalid" in air.validate_config(SimConfig(dcim_settings={"x": 1}))
+    assert air.validate_config(SimConfig(dcim_settings={"image_tag": "1.0"})) == ""

@@ -26,19 +26,17 @@ import re
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nv_config_manager_installer.providers.api import DCIMInstallerProvider, SecretGroupSpec
 from nv_config_manager_installer.providers.errors import InstallerProviderError
 from nv_config_manager_installer.providers.registry import (
     discover_installer_providers,
     get_installer_provider,
 )
-
-if TYPE_CHECKING:
-    from nv_config_manager_installer.providers.api import DCIMInstallerProvider, SecretGroupSpec
 
 _KUBERNETES_NAMESPACE_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$")
 _KUBERNETES_LABEL_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$")

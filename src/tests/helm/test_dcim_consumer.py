@@ -195,3 +195,18 @@ def test_other_providers_get_the_dcim_ini_keys() -> None:
     assert keys["dcim_consumer_name"] == "nv-config-manager-nautobot"
     assert "dcim_change_subjects" in keys
     assert "dcim_api_prefix" in keys
+
+
+def test_local_dcim_proxy_uses_the_gateway_timeout() -> None:
+    text = _render(
+        *_NON_NAUTOBOT,
+        "oidc.enabled=true",
+        "oidc.issuerUrl=https://issuer.example",
+        "oidc.clientId=ci",
+        "dcim.local.enabled=true",
+        "dcim.local.backendName=dcim-web",
+    )
+    dcim_cfg = re.search(r"^  dcim\.cfg: \|\n((?:    .*\n)+)", text, flags=re.M)
+
+    assert dcim_cfg is not None
+    assert 'upstream_timeout = "300s"' in dcim_cfg.group(1)

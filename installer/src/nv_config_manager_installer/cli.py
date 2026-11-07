@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import click
+from pydantic import ValidationError
 
 from nv_config_manager_installer import __version__
 from nv_config_manager_installer.air_sim.cli import air_sim
@@ -44,6 +45,7 @@ from nv_config_manager_installer.providers.api import DCIMInstallerProvider
 from nv_config_manager_installer.providers.errors import InstallerProviderError
 from nv_config_manager_installer.providers.registry import (
     discover_installer_providers,
+    installed_provider,
     installer_provider_errors,
     resolve_provider,
 )
@@ -126,9 +128,21 @@ def init(config_path: Path) -> None:
         except Exception as exc:
             raise click.ClickException(f"Failed to load config: {exc}") from exc
 
-    app = NVConfigManagerInstallerApp(
-        config=config, config_path=config_path, provider=_resolve_provider(config)
-    )
+    try:
+        provider = resolve_provider(config)
+    except InstallerProviderError as exc:
+        # Open the wizard anyway so the provider choice can be fixed there.
+        provider = installed_provider(config)
+        if provider is not None:
+            try:
+                provider.settings(config)
+            except ValidationError as settings_exc:
+                raise click.ClickException(
+                    f"dcim.settings is invalid: {settings_exc}"
+                ) from settings_exc
+        click.echo(f"WARNING: {exc}", err=True)
+
+    app = NVConfigManagerInstallerApp(config=config, config_path=config_path, provider=provider)
     app.run()
 
 

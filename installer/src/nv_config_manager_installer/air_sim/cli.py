@@ -76,6 +76,8 @@ def deploy_air_sim(config_path: Path) -> None:
     except InstallerProviderError as exc:
         raise click.ClickException(str(exc)) from exc
     hooks = provider.air.hooks if provider.air is not None else AirProviderHooks()
+    if provider.air is not None and (error := provider.air.validate_config(config)):
+        raise click.ClickException(error)
     callback = _CliCallback(config.oob_ssh_password)
     orchestrator = SimOrchestrator(config, callback, provider_hooks=hooks)
     orchestrator.run()

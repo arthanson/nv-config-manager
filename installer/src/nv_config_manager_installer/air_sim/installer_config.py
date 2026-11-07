@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import yaml
 
@@ -35,10 +35,8 @@ from nv_config_manager_installer.air_sim.constants import (
     NVCM_SECRETS,
     PROJECT_ROOT,
 )
+from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
-
-if TYPE_CHECKING:
-    from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 
 _NETWORK_SECRET_KEYS = [
     ("root_password", "Switch root / cumulus user password"),

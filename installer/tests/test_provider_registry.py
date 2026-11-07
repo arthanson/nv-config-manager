@@ -16,10 +16,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 from click.testing import CliRunner
 
 from nv_config_manager_installer.cli import main
+from nv_config_manager_installer.deployer import Deployer, DeployOptions
 from nv_config_manager_installer.providers import registry
 from nv_config_manager_installer.providers.errors import (
     InstallerProviderConfigurationError,
@@ -122,3 +126,36 @@ def test_local_only_groups_get_no_vault_values_when_external() -> None:
 
     assert "nautobot" in groups
     assert "nautobot_app" not in groups
+
+
+def test_deployer_validates_an_injected_provider(entry_points: list[_EntryPoint]) -> None:
+    config = NVConfigManagerInstallConfig.model_validate(
+        {
+            "cluster": {"hostname": "test.local"},
+            "dcim": {
+                "local": False,
+                "server": "https://nautobot.example.com",
+                "settings": {"jobs": [{"path": "/jobs"}]},
+            },
+        }
+    )
+
+    with pytest.raises(InstallerProviderConfigurationError):
+        Deployer(config, DeployOptions(), provider=NautobotInstallerProvider())
+
+
+def test_init_opens_the_wizard_when_the_provider_is_not_installed(
+    entry_points: list[_EntryPoint], tmp_path: Path
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "dcim:\n  provider: gone\n  local: false\n  server: https://dcim.example.com\n"
+    )
+
+    with patch("nv_config_manager_installer.cli.NVConfigManagerInstallerApp") as app_cls:
+        result = CliRunner().invoke(main, ["init", "--config", str(config_path)])
+
+    assert result.exit_code == 0, result.output
+    assert 'DCIM provider "gone" is not installed' in result.stderr
+    assert app_cls.call_args.kwargs["provider"] is None
+    app_cls.return_value.run.assert_called_once()

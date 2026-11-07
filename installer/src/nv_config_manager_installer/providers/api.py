@@ -29,10 +29,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from nv_config_manager_installer.air_sim.provider import AirProviderHooks, AirProviderStatus
+from nv_config_manager_installer.air_sim.sim_config import SimConfig
 
+# Type hints only: deployer and schema import this module, so a runtime import is circular.
 if TYPE_CHECKING:
     from nv_config_manager_installer.deployer import (
         DeployCallback,
@@ -140,6 +142,14 @@ class AirContribution:
     hooks: AirProviderHooks = field(default_factory=AirProviderHooks)
     settings_model: type[BaseModel] = ProviderSettings
     population_panel: type[Any] | None = None
+
+    def validate_config(self, cfg: SimConfig) -> str:
+        """Return a launch error for *cfg*, or an empty string when it is ready."""
+        try:
+            self.settings_model.model_validate(cfg.dcim_settings)
+        except ValidationError as exc:
+            return f"dcim_settings is invalid: {exc}"
+        return self.hooks.validate_config(cfg)
 
 
 class ProviderDeployContext(Protocol):
