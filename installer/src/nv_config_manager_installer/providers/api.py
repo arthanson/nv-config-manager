@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 
 INSTALLER_PROVIDER_API_VERSION = "1.0"
 INSTALLER_DCIM_ENTRY_POINT_GROUP = "nv_config_manager.installer.dcim"
+BUILT_IN_NAUTOBOT_PROVIDER = "nautobot-2x"
 
 SecretValue = Callable[[str, str], str]
 ProviderStep = tuple[str, str]
@@ -256,7 +257,8 @@ class DCIMInstallerProvider:
         """Return Helm values merged over the installer-generated values.
 
         A provider that supports ``dcim.local`` must set ``dcim.server`` to its
-        in-cluster endpoint when ``config.dcim.local`` is true.
+        in-cluster endpoint when ``config.dcim.local`` is true. Validation calls
+        this with an empty ``secrets_state`` to check for it.
         """
         return {}
 

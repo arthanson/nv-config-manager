@@ -1241,7 +1241,11 @@ class Deployer:
         nats = self.config.external_services.nats
         if nats.enabled:
             return nats.server
-        return f"nats://{self.config.cluster.release_name}-nats:4222"
+        # Mirrors the chart's nv-config-manager.componentName helper.
+        release = self.config.cluster.release_name
+        fullname = release if "nv-config-manager" in release else f"{release}-nv-config-manager"
+        service = f"{fullname[:63].rstrip('-')}-nats"[:63].rstrip("-")
+        return f"nats://{service}:4222"
 
     def start_step(self, step_id: str) -> DeployStep:
         return self._start_step(step_id)
@@ -2315,7 +2319,7 @@ class Deployer:
 
         assert self._k8s is not None
         step = self._start_step("create-secrets")
-        self._secrets_state = generate_secrets(self.config)
+        self._secrets_state = generate_secrets(self.config, self.provider)
         s = self._secrets_state
 
         self._create_core_secrets(step, s)
@@ -2390,7 +2394,7 @@ class Deployer:
             self._resolve_vault_token(),
             namespace=vault.namespace,
         )
-        result = OpenBaoPopulator(self.config, client).populate()
+        result = OpenBaoPopulator(self.config, client, self.provider).populate()
         for mount in result.mounts_created:
             message = f"Created Vault KV v2 mount: {mount}"
             step.output.append(message)
@@ -2797,7 +2801,7 @@ class Deployer:
     def _generate_values(self) -> None:
         step = self._start_step("generate-values")
         if not self._secrets_state:
-            self._secrets_state = generate_secrets(self.config)
+            self._secrets_state = generate_secrets(self.config, self.provider)
 
         values_fd = tempfile.NamedTemporaryFile(
             suffix=".yaml", prefix="nv-config-manager-values-", delete=False

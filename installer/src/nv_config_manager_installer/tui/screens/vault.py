@@ -29,7 +29,6 @@ from nv_config_manager_installer.openbao import OpenBaoClient, OpenBaoError
 from nv_config_manager_installer.providers.api import DCIMInstallerProvider
 from nv_config_manager_installer.providers.registry import installed_provider, provider_display_name
 from nv_config_manager_installer.schema import (
-    BUILT_IN_NAUTOBOT_PROVIDER,
     GitTokenEntry,
     K8sSecretGroup,
     NVConfigManagerInstallConfig,
@@ -39,7 +38,7 @@ from nv_config_manager_installer.schema import (
     VaultPathConfig,
     database_secret_keys,
 )
-from nv_config_manager_installer.secrets import vault_path_groups
+from nv_config_manager_installer.secrets import uses_core_dcim_groups, vault_path_groups
 from nv_config_manager_installer.tui.widgets import LabeledSwitch
 
 # Ordered list of core vault path groups to display in the TUI.
@@ -174,16 +173,11 @@ def _place[T](core: list[tuple[str, T]], provider: list[tuple[str, T]]) -> list[
     return placed
 
 
-def _uses_core_dcim_groups(provider: DCIMInstallerProvider | None) -> bool:
-    """Return False for the bundled Nautobot provider, whose groups replace dcim and nats."""
-    return provider is None or provider.metadata.name != BUILT_IN_NAUTOBOT_PROVIDER
-
-
 def k8s_groups(provider: DCIMInstallerProvider | None) -> list[_K8sGroup]:
     """Return ``(field, label, optional, fields)`` cards for core and provider groups."""
     provider_groups = list(provider.secrets.groups) if provider is not None else []
     databases = tuple(provider.secrets.databases) if provider is not None else ()
-    core_dcim = _uses_core_dcim_groups(provider)
+    core_dcim = uses_core_dcim_groups(provider)
     core: list[tuple[str, _K8sGroup]] = []
     for field_name, label, optional, fields in _CORE_K8S_GROUPS:
         if field_name in {"dcim", "nats"} and not core_dcim:
@@ -212,7 +206,7 @@ def path_groups(provider: DCIMInstallerProvider | None) -> list[_PathGroup]:
     core: list[tuple[str, _PathGroup]] = [
         (field_name, (field_name, label, dict(defaults.get(field_name, {}))))
         for field_name, label in _CORE_PATH_GROUPS
-        if field_name not in {"dcim", "nats"} or _uses_core_dcim_groups(provider)
+        if field_name not in {"dcim", "nats"} or uses_core_dcim_groups(provider)
     ]
     extra: list[tuple[str, _PathGroup]] = [
         (spec.after, (spec.name, spec.label, dict(spec.keys))) for spec in provider_groups

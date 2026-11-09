@@ -2794,6 +2794,8 @@ cnpg:
   dcim:
     enabled: false
     clusterName: cluster-dcim
+    # Provider database whose postgres <database>User/Password keys fill <clusterName>-app.
+    database: dcim
 # =============================================================================
 # Local Nautobot Deployment (Optional)
 # =============================================================================

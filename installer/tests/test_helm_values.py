@@ -19,7 +19,6 @@ from __future__ import annotations
 import tempfile
 from itertools import product
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 import yaml
@@ -27,14 +26,8 @@ import yaml
 from nv_config_manager_installer.helm_values import (
     _GLOBAL_IMAGE_DEFAULTS,
     _NESTED_IMAGE_DEFAULTS,
-    build_values,
     generate_helm_values,
 )
-from nv_config_manager_installer.providers.api import (
-    DCIMInstallerProvider,
-    InstallerProviderMetadata,
-)
-from nv_config_manager_installer.providers.errors import InstallerProviderConfigurationError
 from nv_config_manager_installer.providers.nautobot import NautobotInstallerProvider
 from nv_config_manager_installer.schema import (
     ClusterConfig,
@@ -1789,16 +1782,3 @@ class TestRedfishInHelmValues:
     def test_temporal_still_has_client(self):
         values = _gen(_make_config())
         assert values["temporal"]["client"]["useInternalEndpoint"] is True
-
-
-class _LocalSyntheticProvider(DCIMInstallerProvider):
-    metadata: ClassVar[InstallerProviderMetadata] = InstallerProviderMetadata(
-        name="synthetic", display_name="Synthetic DCIM"
-    )
-
-
-def test_local_provider_without_a_server_is_rejected() -> None:
-    config = _make_config(dcim=DCIMConfig(provider="synthetic", local=True))
-
-    with pytest.raises(InstallerProviderConfigurationError, match="must set dcim.server"):
-        build_values(config, {}, provider=_LocalSyntheticProvider())

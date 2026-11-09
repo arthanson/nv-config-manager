@@ -110,6 +110,12 @@ def test_install_config_carries_provider_seeded_secret_values() -> None:
         "dcim": {"values": {"token": "shared-token"}},
         "nats": {"values": {"password": "sharedNatsPassword1"}},
     }
+    # Only providers that use the core dcim and nats groups read these values.
+    install_config["dcim"] = {
+        "provider": "synthetic",
+        "local": False,
+        "server": "https://dcim.example.com",
+    }
     loaded = NVConfigManagerInstallConfig.model_validate(install_config)
     assert generate_secrets(loaded)["nats_password"] == "sharedNatsPassword1"
 

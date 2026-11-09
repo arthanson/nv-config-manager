@@ -143,6 +143,25 @@ class TestGenerateSecrets:
         assert state["nats_password"] == "NatsPassword123456"
         assert state["nautobot_db_user"] == "nautobot"
 
+    def test_nautobot_ignores_hidden_generic_dcim_and_nats_values(self):
+        config = NVConfigManagerInstallConfig(
+            secrets=SecretsConfig(
+                method=SecretsMethod.KUBERNETES,
+                k8s=KubernetesSecretsConfig(
+                    dcim=K8sSecretGroup(values={"token": "stale-token"}),
+                    nats=K8sSecretGroup(values={"password": "StalePassword123456"}),
+                    nautobot=K8sSecretGroup(
+                        values={"token": "nb-token", "natsPassword": "NatsPassword123456"}
+                    ),
+                ),
+            ),
+        )
+
+        state = generate_secrets(config)
+
+        assert state["dcim_token"] == "nb-token"
+        assert state["nats_password"] == "NatsPassword123456"
+
     def test_generated_nats_password_is_safe_for_unquoted_nats_config_variable(self, monkeypatch):
         monkeypatch.setattr(secrets_module.secrets, "choice", lambda alphabet: alphabet[-1])
 

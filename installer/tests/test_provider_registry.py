@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -25,6 +26,10 @@ from click.testing import CliRunner
 from nv_config_manager_installer.cli import main
 from nv_config_manager_installer.deployer import Deployer, DeployOptions
 from nv_config_manager_installer.providers import registry
+from nv_config_manager_installer.providers.api import (
+    DCIMInstallerProvider,
+    InstallerProviderMetadata,
+)
 from nv_config_manager_installer.providers.errors import (
     InstallerProviderConfigurationError,
     InstallerProviderDiscoveryError,
@@ -159,3 +164,25 @@ def test_init_opens_the_wizard_when_the_provider_is_not_installed(
     assert 'DCIM provider "gone" is not installed' in result.stderr
     assert app_cls.call_args.kwargs["provider"] is None
     app_cls.return_value.run.assert_called_once()
+
+
+class _LocalProvider(DCIMInstallerProvider):
+    metadata: ClassVar[InstallerProviderMetadata] = InstallerProviderMetadata(
+        name="synthetic", display_name="Synthetic DCIM"
+    )
+
+    def __init__(self, server: str = "") -> None:
+        self.server = server
+
+    def helm_values(self, config, secrets_state, *, is_local, local_tags):  # type: ignore[no-untyped-def]
+        return {"dcim": {"server": self.server}} if self.server else {}
+
+
+def test_local_provider_must_set_a_server() -> None:
+    config = NVConfigManagerInstallConfig.model_validate(
+        {"dcim": {"provider": "synthetic", "local": True}}
+    )
+
+    with pytest.raises(InstallerProviderConfigurationError, match="must set dcim.server"):
+        registry.validate_provider(config, _LocalProvider())
+    assert registry.validate_provider(config, _LocalProvider("http://dcim")).server

@@ -27,7 +27,10 @@ import secrets
 import string
 from typing import Any
 
-from nv_config_manager_installer.providers.api import DCIMInstallerProvider
+from nv_config_manager_installer.providers.api import (
+    BUILT_IN_NAUTOBOT_PROVIDER,
+    DCIMInstallerProvider,
+)
 from nv_config_manager_installer.providers.registry import resolve_provider
 from nv_config_manager_installer.schema import (
     NVConfigManagerInstallConfig,
@@ -107,6 +110,11 @@ def _generate_redfish_secrets(config: NVConfigManagerInstallConfig, state: dict[
 _DB_GROUPS: tuple[str, ...] = ("temporal", "temporal_visibility", "config_store", "dhcp")
 
 
+def uses_core_dcim_groups(provider: DCIMInstallerProvider | None) -> bool:
+    """Return False for the bundled Nautobot provider, whose groups replace dcim and nats."""
+    return provider is None or provider.metadata.name != BUILT_IN_NAUTOBOT_PROVIDER
+
+
 def application_databases(provider: DCIMInstallerProvider) -> tuple[str, ...]:
     """Return core CNPG application databases plus the provider's."""
     return (*_DB_GROUPS, *provider.secrets.databases)
@@ -120,13 +128,15 @@ def _generate_core_k8s_secrets(
 ) -> None:
     """Populate core Kubernetes secrets for the selected DCIM and services.
 
-    Explicit core values are taken first, the provider then seeds values from
-    its own groups, and anything still missing is generated.
+    Explicit core values are taken first when the provider uses the core dcim
+    and nats groups, the provider then seeds values from its own groups, and
+    anything still missing is generated.
     """
-    if token := _v("dcim", "token"):
-        state["dcim_token"] = token
-    if nats_password := _v("nats", "password"):
-        state["nats_password"] = nats_password
+    if uses_core_dcim_groups(provider):
+        if token := _v("dcim", "token"):
+            state["dcim_token"] = token
+        if nats_password := _v("nats", "password"):
+            state["nats_password"] = nats_password
     provider.generate_secret_state(config, state, _v)
 
     state.setdefault("dcim_token", generate_token(40))

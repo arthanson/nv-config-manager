@@ -18,10 +18,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
-from nv_config_manager_installer.air_sim.sim_manager import AirSimulationManager
+
+# Type hint only: a runtime import pulls air_sdk into every schema import.
+if TYPE_CHECKING:
+    from nv_config_manager_installer.air_sim.sim_manager import AirSimulationManager
 
 
 @dataclass(frozen=True)

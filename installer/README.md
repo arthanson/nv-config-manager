@@ -1128,7 +1128,6 @@ installer/
 │   ├── helm_values.py         # Helm values generation
 │   ├── secrets.py             # Secret generation and ESO config
 │   ├── accounts.py            # Bootstrap secret scanner and INI generation
-│   ├── content.py             # Job/template PVC management
 │   ├── deployer.py            # Deployment orchestration engine
 │   ├── k8s.py                 # Kubernetes Python client helpers
 │   ├── registry_client.py     # Docker V2 API for tag fetching

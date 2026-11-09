@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from nv_config_manager_installer.providers.api import (
+    BUILT_IN_NAUTOBOT_PROVIDER,
     INSTALLER_DCIM_ENTRY_POINT_GROUP,
     INSTALLER_PROVIDER_API_VERSION,
     DCIMInstallerProvider,
@@ -185,6 +186,13 @@ def validate_provider(
         raise InstallerProviderConfigurationError(
             f'DCIM provider "{meta.name}" must be deployed in the cluster; set dcim.local to true'
         )
+    if config.dcim.local and meta.name != BUILT_IN_NAUTOBOT_PROVIDER:
+        values = provider.helm_values(config, {}, is_local=False, local_tags=None)
+        if not values.get("dcim", {}).get("server"):
+            raise InstallerProviderConfigurationError(
+                f'DCIM provider "{meta.name}" must set dcim.server in its Helm values '
+                "when dcim.local is true"
+            )
     try:
         provider.settings(config)
     except ValidationError as exc:

@@ -228,6 +228,19 @@ class TestDeployerInit:
         ):
             Deployer(config, DeployOptions())
 
+    @pytest.mark.parametrize(
+        ("release", "url"),
+        [
+            ("nv-config-manager", "nats://nv-config-manager-nats:4222"),
+            ("ci", "nats://ci-nv-config-manager-nats:4222"),
+        ],
+    )
+    def test_nats_url_matches_the_chart_service_name(self, release, url):
+        config = _make_config()
+        config.cluster.release_name = release
+
+        assert Deployer(config, DeployOptions()).nats_url == url
+
     def test_provider_steps_are_spliced_around_core_steps(self):
         deployer = Deployer(_make_config(), DeployOptions())
         ids = [s.id for s in deployer.steps]

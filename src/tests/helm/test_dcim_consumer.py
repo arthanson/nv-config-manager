@@ -210,3 +210,18 @@ def test_local_dcim_proxy_uses_the_gateway_timeout() -> None:
 
     assert dcim_cfg is not None
     assert 'upstream_timeout = "300s"' in dcim_cfg.group(1)
+
+
+@pytest.mark.parametrize(("database", "user_key"), [(None, "dcim_user"), ("net_box", "netBoxUser")])
+def test_dcim_database_credentials_follow_the_cnpg_settings(
+    database: str | None, user_key: str
+) -> None:
+    extra = (f"cnpg.dcim.database={database}",) if database else ()
+    docs = _docs(
+        _render(*_NON_NAUTOBOT, "cnpg.dcim.enabled=true", "cnpg.dcim.clusterName=pg", *extra)
+    )
+
+    secret = _find(docs, "ExternalSecret", "cnpg-dcim-credentials")
+    assert secret is not None
+    assert secret["spec"]["target"]["name"] == "pg-app"
+    assert secret["spec"]["data"][0]["remoteRef"]["property"] == user_key

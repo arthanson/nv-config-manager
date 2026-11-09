@@ -376,7 +376,10 @@ attributes:
   are rejected.
 - `secrets`: `SecretsContribution` with `SecretGroupSpec` groups exposed as
   `secrets.k8s.<name>` and `secrets.vault.paths.<name>`, extra CNPG
-  `databases`, and extra NATS Secret names. A provider without groups uses
+  `databases`, and extra NATS Secret names. Under ESO, a provider that sets
+  `cnpg.dcim.enabled` in its Helm values also sets `cnpg.dcim.clusterName` and
+  `cnpg.dcim.database` (default `dcim`) so the `<clusterName>-app` Secret reads
+  that database's credentials. A provider without groups uses
   the generic `dcim` and `nats` groups. `after` names the core group a card
   follows in the wizard (`""` places it first); `k8s_after` and `k8s_label`
   override placement and label for the Kubernetes-mode card.
@@ -450,18 +453,21 @@ class ExampleInstallerProvider(DCIMInstallerProvider):
         token = ctx.secrets_state["dcim_token"]
         nats_password = ctx.secrets_state["nats_password"]
         ...  # deploy the provider stack with ctx.k8s, seeding the API token and NATS credentials
-        ctx.config.dcim.server = f"http://example-dcim.{ctx.config.cluster.namespace}.svc"
         ctx.finish_step(step)
 
     def helm_values(self, config, secrets_state, *, is_local, local_tags):
-        return {"externalServices": {"nats": {"local": True}}}
+        values = {"externalServices": {"nats": {"local": True}}}
+        if config.dcim.local:
+            values["dcim"] = {"server": f"http://example-dcim.{config.cluster.namespace}.svc"}
+        return values
 ```
 
 `dcim.local` selects where the DCIM runs. When it is true, the provider
-deploys its in-cluster stack from `pre_helm_install` and sets `dcim.server` to
-the in-cluster endpoint. The install stops if the Helm values carry no
-`dcim.server`. When it is false, `dcim.server` is required and must point at
-an existing instance. A configuration that sets `dcim.server` without
+deploys its in-cluster stack from `pre_helm_install`, and `helm_values` sets
+`dcim.server` to the in-cluster endpoint. Validation calls `helm_values` with
+empty secrets and rejects the configuration if it returns no `dcim.server`.
+When it is false, `dcim.server` is required and must point at an existing
+instance. A configuration that sets `dcim.server` without
 `dcim.local` is treated as external. Dependent pods wait for the DCIM only
 when `helm_values` sets `dcim.readiness.path`. The wait honors `dcim.verify:
 false`. `supports_local` and `supports_external` in the

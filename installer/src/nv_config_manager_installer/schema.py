@@ -31,7 +31,11 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nv_config_manager_installer.providers.api import DCIMInstallerProvider, SecretGroupSpec
+from nv_config_manager_installer.providers.api import (
+    BUILT_IN_NAUTOBOT_PROVIDER,
+    DCIMInstallerProvider,
+    SecretGroupSpec,
+)
 from nv_config_manager_installer.providers.errors import InstallerProviderError
 from nv_config_manager_installer.providers.registry import (
     discover_installer_providers,
@@ -105,7 +109,6 @@ class ZTPStorageType(StrEnum):
 
 
 SUPPORTED_ZTP_IMAGE_PLATFORMS = frozenset({"cumulus-linux", "arista-eos", "nv-os", "mlnx-os"})
-BUILT_IN_NAUTOBOT_PROVIDER = "nautobot-2x"
 
 
 class ImageSource(StrEnum):
