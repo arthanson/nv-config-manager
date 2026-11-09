@@ -34,6 +34,7 @@ from nv_config_manager_installer.air_sim.orchestrator import (
     StepStatus,
     _monitor_setup_command,
 )
+from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
 from nv_config_manager_installer.air_sim.sim_manager import AirSimulationManager
 
@@ -580,14 +581,51 @@ def test_derived_orchestrator_replaces_provider_post_deploy_behavior() -> None:
         17117,
         additional_hostnames=("netbox.nvcm.air",),
     )
-    manager.create_nautobot_demo_user.assert_not_called()
-    manager.wait_for_intended_configs.assert_not_called()
+    manager.run_remote.assert_not_called()
     manager.ensure_temporal_search_attributes.assert_called_once_with("worker.example", 17117)
 
 
+def test_orchestrator_delegates_provider_stages_to_hooks() -> None:
+    calls: list[str] = []
+
+    class Hooks(AirProviderHooks):
+        def gateway_hostnames(self, cfg: SimConfig) -> tuple[str, ...]:
+            return ("dcim.nvcm.air",)
+
+        def post_deploy(self, manager: AirSimulationManager, host: str, port: int) -> None:
+            calls.append(f"post:{host}:{port}")
+
+        def wait_for_configs(
+            self, manager: AirSimulationManager, host: str, port: int, expected_total: int
+        ) -> None:
+            calls.append(f"wait:{expected_total}")
+
+    cfg = SimConfig(no_reset_before_dhcp=True)
+    orchestrator = SimOrchestrator(cfg, _Callback(), provider_hooks=Hooks())
+    manager = Mock(spec=AirSimulationManager)
+    builder = SimpleNamespace(relay_return_prefixes=[], devices={})
+
+    orchestrator._run_post_deploy(
+        manager, cfg, builder, "simulation-id", "worker.example", 17117, "00:11:22:33:44:55", None
+    )
+
+    assert calls == ["wait:0", "post:worker.example:17117"]
+    manager.configure_etc_hosts.assert_called_once_with(
+        "worker.example", 17117, additional_hostnames=("dcim.nvcm.air",)
+    )
+
+
 def test_post_deploy_does_not_reset_inventory_only_switches() -> None:
+    config_waits: list[int] = []
+
+    class Hooks(AirProviderHooks):
+        def wait_for_configs(
+            self, manager: AirSimulationManager, host: str, port: int, expected_total: int
+        ) -> None:
+            config_waits.append(expected_total)
+
     cfg = SimConfig()
-    orchestrator = SimOrchestrator(cfg, _Callback())
+    orchestrator = SimOrchestrator(cfg, _Callback(), provider_hooks=Hooks())
     manager = Mock(spec=AirSimulationManager)
     builder = SimpleNamespace(
         relay_return_prefixes=[],
@@ -609,6 +647,22 @@ def test_post_deploy_does_not_reset_inventory_only_switches() -> None:
     )
 
     manager.reset_cumulus_nodes.assert_called_once_with("simulation-id", ["simulated"])
-    manager.wait_for_intended_configs.assert_called_once_with(
-        "worker.example", 17117, expected_total=1
-    )
+    assert config_waits == [1]
+
+
+def test_deploy_command_carries_the_provider_installer_packages() -> None:
+    class _Hooks(AirProviderHooks):
+        def installer_packages(self, cfg: SimConfig) -> AirInstallerPackages:
+            return AirInstallerPackages(requirements=("example-provider",), find_links=("/w",))
+
+    command = SimOrchestrator(
+        SimConfig(), _Callback(), provider_hooks=_Hooks()
+    )._build_deploy_command(SimConfig())
+
+    assert "--find-links /w --with example-provider nv-config-manager-installer deploy" in command
+
+
+def test_built_in_provider_needs_no_installer_packages() -> None:
+    command = SimOrchestrator(SimConfig(), _Callback())._build_deploy_command(SimConfig())
+
+    assert "--with" not in command

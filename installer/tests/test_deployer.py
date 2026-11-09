@@ -48,6 +48,9 @@ from nv_config_manager_installer.deployer import (
 )
 from nv_config_manager_installer.k8s import LOADER_POD_IMAGE
 from nv_config_manager_installer.nautobot_jobs import NautobotJobRunner
+from nv_config_manager_installer.providers.api import DeployStepsContribution
+from nv_config_manager_installer.providers.errors import InstallerProviderConfigurationError
+from nv_config_manager_installer.providers.nautobot import NautobotInstallerProvider
 from nv_config_manager_installer.schema import (
     ClusterConfig,
     ContentConfig,
@@ -58,13 +61,10 @@ from nv_config_manager_installer.schema import (
     ImagesConfig,
     ImageSource,
     InfrastructureConfig,
-    JobPath,
-    JobsConfig,
     K8sSecretGroup,
     KubernetesSecretsConfig,
     NetworkSecretEntry,
     NVConfigManagerInstallConfig,
-    PostDeployJob,
     RedfishConfig,
     RedfishVendorCreds,
     SecretsConfig,
@@ -219,12 +219,46 @@ class TestDeployerInit:
 
     def test_revalidates_tui_config_before_deployment(self):
         config = _make_config()
-        config.services.nautobot = False
-        config.services.external_nautobot_url = "https://nb.example.com"
-        config.content.run_after_deploy = [PostDeployJob(job="jobs.bootstrap.SiteBootstrap")]
+        config.dcim.local = False
+        config.dcim.server = "https://nb.example.com"
+        config.dcim.settings = {"run_after_deploy": [{"job": "jobs.bootstrap.SiteBootstrap"}]}
 
-        with pytest.raises(ValueError, match="post-deploy jobs require a local Nautobot"):
+        with pytest.raises(
+            InstallerProviderConfigurationError, match="post-deploy jobs require a local Nautobot"
+        ):
             Deployer(config, DeployOptions())
+
+    @pytest.mark.parametrize(
+        ("release", "url"),
+        [
+            ("nv-config-manager", "nats://nv-config-manager-nats:4222"),
+            ("ci", "nats://ci-nv-config-manager-nats:4222"),
+        ],
+    )
+    def test_nats_url_matches_the_chart_service_name(self, release, url):
+        config = _make_config()
+        config.cluster.release_name = release
+
+        assert Deployer(config, DeployOptions()).nats_url == url
+
+    def test_provider_steps_are_spliced_around_core_steps(self):
+        deployer = Deployer(_make_config(), DeployOptions())
+        ids = [s.id for s in deployer.steps]
+
+        assert ids.index("setup-jobs-pvc") == ids.index("setup-templates-pvc") - 1
+        assert ids.index("restart-nautobot") == ids.index("patch-gateway") + 1
+        assert ids.index("run-jobs") == ids.index("restart-render") + 1
+        assert ids.index("run-jobs") < ids.index("refresh-cache")
+
+    def test_external_provider_has_only_core_steps(self):
+        config = _make_config()
+        config.dcim = DCIMConfig(
+            provider="synthetic", server="https://synthetic.example", local=False
+        )
+        deployer = Deployer(config, DeployOptions())
+        ids = {s.id for s in deployer.steps}
+
+        assert not ids & {"setup-jobs-pvc", "restart-nautobot", "run-jobs"}
 
 
 class TestGatewayClassReuse:
@@ -280,20 +314,42 @@ class TestGatewayClassReuse:
 
 
 class TestStepSequencing:
-    def test_derived_provider_hooks_wrap_helm_install(self, monkeypatch, tmp_path):
+    def test_provider_hooks_wrap_helm_install(self, monkeypatch, tmp_path):
         calls: list[str] = []
 
-        class ProviderDeployer(Deployer):
-            def _run_provider_pre_helm_install(self) -> None:
+        class Provider(NautobotInstallerProvider):
+            def deploy_steps(self) -> DeployStepsContribution:
+                return DeployStepsContribution(
+                    before={"helm-install": (("provider-pre", "Provider pre"),)},
+                    after={"helm-install": (("provider-post", "Provider post"),)},
+                )
+
+            def setup_content(self, ctx) -> None:
+                calls.append("provider-content")
+
+            def pre_helm_install(self, ctx) -> None:
                 calls.append("provider-pre")
 
+            def post_helm_install(self, ctx) -> None:
+                calls.append("provider-post")
+
+            def post_gateway(self, ctx) -> None:
+                calls.append("provider-gateway")
+
+            def post_restart(self, ctx) -> None:
+                calls.append("provider-restart")
+
+        class ProviderDeployer(Deployer):
             def _helm_install(self) -> None:
                 calls.append("helm")
 
-            def _run_provider_post_helm_install(self) -> None:
-                calls.append("provider-post")
-
-        deployer = ProviderDeployer(_make_config(), DeployOptions(), RecordingCallback())
+        deployer = ProviderDeployer(
+            _make_config(), DeployOptions(), RecordingCallback(), provider=Provider()
+        )
+        assert [s.id for s in deployer.steps if s.id.startswith("provider-")] == [
+            "provider-pre",
+            "provider-post",
+        ]
         monkeypatch.setattr(
             "nv_config_manager_installer.deployer.find_project_root", lambda _explicit: tmp_path
         )
@@ -309,23 +365,68 @@ class TestStepSequencing:
             "_install_crds",
             "_create_namespace",
             "_create_secrets",
-            "_populate_vault",
-            "_setup_jobs_pvc",
-            "_setup_templates_pvc",
             "_setup_ztp_pvc",
             "_generate_values",
             "_patch_gateway",
-            "_restart_nautobot",
             "_restart_render_service",
-            "_run_post_deploy_jobs",
             "_refresh_caches",
             "_run_integration_tests",
         ):
             monkeypatch.setattr(deployer, method_name, lambda: None)
+        monkeypatch.setattr(deployer, "_populate_vault", lambda: calls.append("vault"))
+        monkeypatch.setattr(deployer, "_setup_templates_pvc", lambda: calls.append("templates"))
         monkeypatch.setattr(deployer, "_collect_endpoints", lambda: [])
 
         assert deployer.run() is True
-        assert calls == ["provider-pre", "helm", "provider-post"]
+        assert calls == [
+            "vault",
+            "provider-content",
+            "templates",
+            "provider-pre",
+            "helm",
+            "provider-post",
+            "provider-gateway",
+            "provider-restart",
+        ]
+
+    def test_nautobot_jobs_pvc_runs_in_its_listed_position(self, monkeypatch, tmp_path):
+        """The jobs PVC step executes where the Deploy screen lists it."""
+        calls: list[str] = []
+        deployer = Deployer(_make_config(), DeployOptions(), RecordingCallback())
+        monkeypatch.setattr(
+            "nv_config_manager_installer.deployer.find_project_root", lambda _explicit: tmp_path
+        )
+        monkeypatch.setattr(deployer, "_validate_project_paths", lambda _root: None)
+        for method_name, step_id in (
+            ("_check_prerequisites", "prereqs"),
+            ("_detect_existing_state", None),
+            ("_build_images", "build-images"),
+            ("_load_kind", "load-kind"),
+            ("_install_crds", "install-crds"),
+            ("_create_namespace", "create-namespace"),
+            ("_create_secrets", "create-secrets"),
+            ("_populate_vault", "populate-vault"),
+            ("_setup_templates_pvc", "setup-templates-pvc"),
+            ("_setup_ztp_pvc", "setup-ztp-pvc"),
+            ("_generate_values", "generate-values"),
+            ("_helm_install", "helm-install"),
+            ("_patch_gateway", "patch-gateway"),
+            ("_restart_render_service", "restart-render"),
+            ("_refresh_caches", "refresh-cache"),
+            ("_run_integration_tests", "run-tests"),
+        ):
+            monkeypatch.setattr(
+                deployer, method_name, lambda s=step_id: calls.append(s) if s else None
+            )
+        provider = deployer.provider
+        monkeypatch.setattr(provider, "setup_content", lambda _ctx: calls.append("setup-jobs-pvc"))
+        monkeypatch.setattr(provider, "post_gateway", lambda _ctx: calls.append("restart-nautobot"))
+        monkeypatch.setattr(provider, "post_restart", lambda _ctx: calls.append("run-jobs"))
+        monkeypatch.setattr(deployer, "_collect_endpoints", lambda: [])
+
+        assert deployer.run() is True
+        listed = [s.id for s in deployer.steps if s.id in calls]
+        assert calls == listed
 
     @patch("nv_config_manager_installer.deployer.shutil.which", return_value=None)
     def test_prereqs_fail_when_kubectl_missing(self, mock_which):
@@ -921,8 +1022,9 @@ class TestKindImageLoading:
     def test_external_dcim_excludes_nautobot_from_local_images(self):
         """Omit Nautobot images when an external DCIM provider is selected."""
         config = _make_config()
-        config.services.nautobot = False
-        config.dcim = DCIMConfig(provider="synthetic", server="https://synthetic.example")
+        config.dcim = DCIMConfig(
+            provider="synthetic", server="https://synthetic.example", local=False
+        )
         deployer = Deployer(config, DeployOptions(), RecordingCallback())
 
         image_names = {build[0] for build in deployer._local_image_builds()}
@@ -930,12 +1032,28 @@ class TestKindImageLoading:
         assert "nv-config-manager-nautobot" not in image_names
         assert len(image_names) == 9
 
+    def test_local_nautobot_adds_its_image_to_local_builds(self):
+        deployer = Deployer(_make_config(), DeployOptions(), RecordingCallback())
+
+        image_names = [build[0] for build in deployer._local_image_builds()]
+
+        assert image_names[0] == "nv-config-manager-nautobot"
+        assert len(image_names) == 10
+
+    def test_external_nautobot_omits_the_local_only_image(self):
+        config = _make_config()
+        config.dcim = DCIMConfig(local=False, server="https://nb.example.com")
+        deployer = Deployer(config, DeployOptions(), RecordingCallback())
+
+        assert "nv-config-manager-nautobot" not in {b[0] for b in deployer._local_image_builds()}
+
     def test_external_dcim_does_not_load_nautobot_image(self, monkeypatch):
         """Load only the local images needed by the selected DCIM provider."""
         logged_commands: list[list[str]] = []
         config = _make_config()
-        config.services.nautobot = False
-        config.dcim = DCIMConfig(provider="synthetic", server="https://synthetic.example")
+        config.dcim = DCIMConfig(
+            provider="synthetic", server="https://synthetic.example", local=False
+        )
         monkeypatch.setattr(
             "nv_config_manager_installer.deployer._run_logged",
             lambda cmd, *_args, **_kwargs: logged_commands.append(cmd),
@@ -1454,23 +1572,20 @@ class TestRerunState:
     def test_defaults(self):
         state = _RerunState()
         assert state.is_rerun is False
-        assert state.jobs_changed is True
         assert state.templates_changed is True
 
     def test_deployer_has_rerun_state(self):
         config = _make_config()
         deployer = Deployer(config, DeployOptions())
         assert deployer._rerun.is_rerun is False
-        assert deployer._rerun.jobs_changed is True
+        assert deployer.provider_state == {}
 
 
 class TestConditionalRestart:
-    """Verify _restart_nautobot and _restart_render_service skip logic."""
+    """Verify the Nautobot restart hook and _restart_render_service skip logic."""
 
     def _make_deployer(self, *, jobs=True, templates=False) -> tuple:
         content_kwargs: dict = {}
-        if jobs:
-            content_kwargs["jobs"] = [JobPath(path="/fake/jobs")]
         if templates:
             content_kwargs["template_plugins"] = [TemplatePath(path="/fake/tpls")]
         config = _make_config()
@@ -1479,23 +1594,28 @@ class TestConditionalRestart:
             secrets=config.secrets,
             sites=config.sites,
             content=ContentConfig(**content_kwargs),
+            dcim=DCIMConfig(settings={"jobs": [{"path": "/fake/jobs"}]} if jobs else {}),
         )
         cb = RecordingCallback()
         deployer = Deployer(config, DeployOptions(), cb)
         deployer._k8s = _mock_k8s()
         return deployer, cb
 
+    @staticmethod
+    def _restart_nautobot(deployer: Deployer, *, is_rerun: bool, jobs_changed: bool) -> None:
+        deployer._rerun = _RerunState(is_rerun=is_rerun)
+        deployer.provider_state["jobs_changed"] = jobs_changed
+        deployer.provider.post_gateway(deployer)
+
     def test_skip_restart_nautobot_on_fresh_install(self):
         deployer, cb = self._make_deployer(jobs=True)
-        deployer._rerun = _RerunState(is_rerun=False, jobs_changed=True)
-        deployer._restart_nautobot()
+        self._restart_nautobot(deployer, is_rerun=False, jobs_changed=True)
         statuses = dict(cb.step_updates)
         assert statuses.get("restart-nautobot") == StepStatus.SKIPPED
 
     def test_skip_restart_nautobot_when_jobs_unchanged(self):
         deployer, cb = self._make_deployer(jobs=True)
-        deployer._rerun = _RerunState(is_rerun=True, jobs_changed=False)
-        deployer._restart_nautobot()
+        self._restart_nautobot(deployer, is_rerun=True, jobs_changed=False)
         statuses = dict(cb.step_updates)
         assert statuses.get("restart-nautobot") == StepStatus.SKIPPED
 
@@ -1503,8 +1623,7 @@ class TestConditionalRestart:
     def test_restart_nautobot_on_rerun_with_changed_jobs(self, mock_run_logged):
         mock_run_logged.return_value = MagicMock(returncode=0, stdout="", stderr="")
         deployer, cb = self._make_deployer(jobs=True)
-        deployer._rerun = _RerunState(is_rerun=True, jobs_changed=True)
-        deployer._restart_nautobot()
+        self._restart_nautobot(deployer, is_rerun=True, jobs_changed=True)
         statuses = dict(cb.step_updates)
         assert statuses.get("restart-nautobot") == StepStatus.SUCCESS
         deployer._k8s.restart_deployment.assert_called()
@@ -1557,12 +1676,11 @@ class TestPvcContentUpload:
         monkeypatch.chdir(Path(__file__).resolve().parents[2])
 
         config = _make_config()
-        config.content = ContentConfig(
-            jobs=[JobPath(path=str(job_dir))],
-        )
+        config.dcim.settings = {"jobs": [{"path": str(job_dir)}]}
         deployer = Deployer(config, DeployOptions(), RecordingCallback())
         deployer._k8s = _mock_k8s()
-        deployer._rerun = _RerunState(is_rerun=True, jobs_changed=True)
+        deployer._rerun = _RerunState(is_rerun=True)
+        deployer.provider_state["jobs_changed"] = True
         uploaded_members: list[str] = []
 
         def capture_tarball(source: str, *_args: object) -> None:
@@ -1571,7 +1689,7 @@ class TestPvcContentUpload:
 
         deployer._k8s.copy_to_pod.side_effect = capture_tarball
 
-        deployer._setup_jobs_pvc()
+        deployer.provider.setup_content(deployer)
 
         assert "__init__.py" in uploaded_members
         assert "mock_topology/__init__.py" in uploaded_members
@@ -1842,10 +1960,10 @@ class TestK8sClientIntegration:
         config.dcim = DCIMConfig(
             provider="synthetic",
             server="https://synthetic.example",
+            local=False,
             token_secret_name="synthetic-dcim-token",
             token_secret_key="access-token",
         )
-        config.services = ServicesConfig(nautobot=False)
 
         Deployer(config, DeployOptions(dry_run=True), RecordingCallback()).run()
 
@@ -1857,7 +1975,31 @@ class TestK8sClientIntegration:
         assert token_call.args[2]["access-token"]
         secret_names = [call.args[0] for call in mock_k8s.apply_secret.call_args_list]
         assert "nautobot-admin" not in secret_names
-        assert {"nats-sys", "nats-nv-config-manager", "nats-nautobot"}.issubset(secret_names)
+        assert "cluster-nautobot-app" not in secret_names
+        assert {"nats-sys", "nats-nv-config-manager"}.issubset(secret_names)
+        assert "nats-nautobot" not in secret_names
+
+    @patch("nv_config_manager_installer.deployer._run_logged")
+    @patch("nv_config_manager_installer.deployer._run")
+    @patch("nv_config_manager_installer.deployer.K8sClient")
+    @patch("nv_config_manager_installer.deployer.shutil.which", return_value="/usr/bin/kubectl")
+    def test_external_dcim_uses_provider_default_token_secret_name(
+        self, mock_which, mock_k8s_cls, mock_run, mock_run_logged
+    ):
+        mock_k8s = _mock_k8s()
+        mock_k8s_cls.return_value = mock_k8s
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run_logged.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        config = _make_config()
+        config.dcim = DCIMConfig(
+            provider="synthetic", server="https://synthetic.example", local=False
+        )
+
+        Deployer(config, DeployOptions(dry_run=True), RecordingCallback()).run()
+
+        secret_names = [call.args[0] for call in mock_k8s.apply_secret.call_args_list]
+        assert "dcim-token" in secret_names
+        assert "nautobot-token" not in secret_names
 
     @patch("nv_config_manager_installer.deployer._run_logged")
     @patch("nv_config_manager_installer.deployer._run")
@@ -2132,19 +2274,19 @@ class TestK8sClientIntegration:
 
     def test_jobs_pvc_uses_storage_config_and_node_selector(self):
         config = _make_config()
-        config.content = ContentConfig(
-            jobs=[JobPath(path="/fake/jobs")],
-            jobs_config=JobsConfig(
-                storage_class="local-path",
-                access_mode="ReadWriteOnce",
-                node_selector={"kubernetes.io/hostname": "worker-1"},
-            ),
-        )
+        config.dcim.settings = {
+            "jobs": [{"path": "/fake/jobs"}],
+            "jobs_config": {
+                "storage_class": "local-path",
+                "access_mode": "ReadWriteOnce",
+                "node_selector": {"kubernetes.io/hostname": "worker-1"},
+            },
+        }
         callback = RecordingCallback()
         deployer = Deployer(config, DeployOptions(), callback)
         deployer._k8s = _mock_k8s()
 
-        deployer._setup_jobs_pvc()
+        deployer.provider.setup_content(deployer)
 
         deployer._k8s.ensure_pvc.assert_called_once_with(
             "nautobot-custom-jobs",
@@ -2166,7 +2308,7 @@ class TestK8sClientIntegration:
         deployer = Deployer(_make_config(), DeployOptions(), callback)
         deployer._k8s = _mock_k8s()
 
-        deployer._setup_jobs_pvc()
+        deployer.provider.setup_content(deployer)
 
         assert dict(callback.step_updates)["setup-jobs-pvc"] == StepStatus.SKIPPED
         deployer._k8s.ensure_pvc.assert_not_called()
@@ -2280,3 +2422,13 @@ class TestRedfishSecrets:
 
         secret_names = [call.args[0] for call in mock_k8s.apply_secret.call_args_list]
         assert not any("device-creds" in n for n in secret_names)
+
+
+def test_integration_test_script_quotes_provider_values() -> None:
+    deployer = Deployer(_make_config(), DeployOptions())
+
+    script = deployer._build_test_script("ns'1", "rel", {"DCIM_TOKEN": "a'b\\c\"d"})
+
+    compile(script, "<test-script>", "exec")
+    assert repr("a'b\\c\"d") in script
+    assert repr("ns'1") in script

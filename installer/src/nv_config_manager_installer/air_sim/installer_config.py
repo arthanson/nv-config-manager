@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from nv_config_manager_installer.air_sim.constants import (
     NVCM_SECRETS,
     PROJECT_ROOT,
 )
+from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
 
 _NETWORK_SECRET_KEYS = [
@@ -45,11 +46,10 @@ _NETWORK_SECRET_KEYS = [
     ("tacacs_key", "TACACS+ shared key"),
 ]
 
-_MOCK_TOPOLOGY_JOB = "custom.mock_topology.jobs.mock_topology_design.MockTopologyDesign"
 _DEMO_TEMPLATE_BLUEPRINTS = {"air_trial", "air_superpod"}
 
 
-def _remote_repo_path(path: str) -> str:
+def remote_repo_path(path: str) -> str:
     """Map repo-local paths on the workstation to paths in the DSX Air server clone."""
     if not path:
         return path
@@ -63,58 +63,14 @@ def _remote_repo_path(path: str) -> str:
     return f"{CONFIG_MANAGER_REMOTE_DIR}/{path_obj.as_posix()}"
 
 
-def _normalize_post_deploy_job(job_spec: dict[str, Any]) -> dict[str, str]:
-    job = str(job_spec.get("job", "")).strip()
-    raw_input = job_spec.get("input", "")
-    if isinstance(raw_input, str):
-        job_input = raw_input
-    else:
-        job_input = json.dumps(raw_input)
-    return {"job": job, "input": job_input}
-
-
-def build_content_jobs(cfg: SimConfig) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Return installer content.jobs and content.run_after_deploy entries."""
-    jobs: list[dict[str, str]] = []
-    run_after_deploy: list[dict[str, str]] = []
-
-    if cfg.run_mock_topology_job:
-        jobs.append(
-            {
-                "path": cfg.mock_topology_path
-                if cfg._air_content_staged
-                else _remote_repo_path(cfg.mock_topology_path or "development/mock_topology")
-            }
-        )
-        run_after_deploy.append(
-            {
-                "job": _MOCK_TOPOLOGY_JOB,
-                "input": json.dumps(
-                    {"blueprint": cfg.mock_blueprint, "deployment_name": cfg.deployment_name}
-                ),
-            }
-        )
-
-    for path in cfg.extra_job_paths:
-        if path:
-            jobs.append({"path": path if cfg._air_content_staged else _remote_repo_path(path)})
-
-    for job_spec in cfg.extra_run_after_deploy:
-        normalized = _normalize_post_deploy_job(job_spec)
-        if normalized["job"]:
-            run_after_deploy.append(normalized)
-
-    return jobs, run_after_deploy
-
-
 def template_plugin_paths(cfg: SimConfig) -> list[str]:
     """Return configured and inferred local template-plugin paths."""
     paths = [path for path in cfg.template_plugin_paths if path]
 
     if cfg.mock_blueprint in _DEMO_TEMPLATE_BLUEPRINTS and not cfg._air_content_staged:
         default_path = DEFAULT_AIR_DEMO_TEMPLATE_PLUGIN_PATH.as_posix()
-        default_remote_path = _remote_repo_path(default_path)
-        if all(_remote_repo_path(path) != default_remote_path for path in paths):
+        default_remote_path = remote_repo_path(default_path)
+        if all(remote_repo_path(path) != default_remote_path for path in paths):
             paths.append(default_path)
 
     return paths
@@ -124,19 +80,28 @@ def build_template_plugins(cfg: SimConfig) -> list[dict[str, str]]:
     """Return installer content.template_plugins entries."""
     paths = template_plugin_paths(cfg)
 
-    return [
-        {"path": path if cfg._air_content_staged else _remote_repo_path(path)} for path in paths
-    ]
+    return [{"path": path if cfg._air_content_staged else remote_repo_path(path)} for path in paths]
 
 
 def generate_air_sim_install_config(
     cfg: SimConfig,
     site_name: str,
     lb_allowed_prefixes: list[str],
+    provider_hooks: AirProviderHooks | None = None,
 ) -> dict[str, Any]:
     """Build the installer config structure for NVIDIA Config Manager."""
-    content_jobs, run_after_deploy = build_content_jobs(cfg)
     template_plugins = build_template_plugins(cfg)
+    dcim: dict[str, Any] = {"provider": cfg.dcim_provider, "local": True}
+    settings = provider_hooks.install_settings(cfg) if provider_hooks is not None else {}
+    if settings:
+        dcim["settings"] = settings
+    seeded = provider_hooks.install_secrets(cfg) if provider_hooks is not None else {}
+    secrets: dict[str, Any] = {
+        "method": "kubernetes",
+        "config_manager_service_username": NVCM_SECRETS["nvcm_user"],
+    }
+    if seeded:
+        secrets["k8s"] = {group: {"values": dict(values)} for group, values in seeded.items()}
 
     network_secrets = [
         {
@@ -159,27 +124,22 @@ def generate_air_sim_install_config(
             "mock_devices": False,
             "size": cfg.size,
         },
-        "secrets": {
-            "method": "kubernetes",
-            "config_manager_service_username": NVCM_SECRETS["nvcm_user"],
-        },
+        "secrets": secrets,
         "network_secrets": network_secrets,
         "git_tokens": [],
         "sites": [{"name": site_name}],
         "sso": {"enabled": False},
         "spiffe": {"enabled": False},
+        "dcim": dcim,
         "services": {
             "render": True,
             "ztp": True,
             "dhcp": True,
             "temporal": True,
             "config_store": True,
-            "nautobot": True,
         },
         "content": {
-            "jobs": content_jobs,
             "template_plugins": template_plugins,
-            "run_after_deploy": run_after_deploy,
         },
         "infrastructure": {
             "gateway": "envoyGateway",
@@ -206,22 +166,28 @@ def generate_air_sim_install_yaml(
     cfg: SimConfig,
     site_name: str,
     lb_allowed_prefixes: list[str],
+    provider_hooks: AirProviderHooks | None = None,
 ) -> str:
     """Return nv-config-manager-install.yaml as YAML."""
-    data = generate_air_sim_install_config(cfg, site_name, lb_allowed_prefixes)
+    data = generate_air_sim_install_config(cfg, site_name, lb_allowed_prefixes, provider_hooks)
     return yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
 
 
-def build_deploy_command(_cfg: SimConfig) -> str:
+def build_deploy_command(_cfg: SimConfig, packages: AirInstallerPackages | None = None) -> str:
     """Return the remote command that runs nv-config-manager-installer deploy."""
     user = NVCM_BOX_USER
     kube = f"KUBECONFIG=/home/{user}/.kube/config"
     config_path = f"/home/{user}/{CONFIG_MANAGER_INSTALL_CONFIG}"
+    overlay = ""
+    if packages is not None:
+        overlay = "".join(f" --find-links {shlex.quote(d)}" for d in packages.find_links)
+        overlay += "".join(f" --with {shlex.quote(r)}" for r in packages.requirements)
 
     return (
         f"sudo NO_COLOR=1 {kube} uv run --python 3.13"
         f" --directory {CONFIG_MANAGER_REMOTE_DIR}"
         f" --project {CONFIG_MANAGER_REMOTE_DIR}/installer"
+        f"{overlay}"
         f" nv-config-manager-installer deploy {config_path}"
         f" --chart-dir {CONFIG_MANAGER_REMOTE_DIR}/deploy/helm"
         f" --kind-cluster {CONFIG_MANAGER_KIND_CLUSTER}"

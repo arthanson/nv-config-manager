@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 import yaml
+from pydantic import BaseModel, ConfigDict
 
 from nv_config_manager_installer.air_sim.constants import (
     CONFIG_MANAGER_REMOTE_DIR,
@@ -26,13 +27,21 @@ from nv_config_manager_installer.air_sim.constants import (
     PROJECT_ROOT,
 )
 from nv_config_manager_installer.air_sim.installer_config import (
-    build_content_jobs,
     build_deploy_command,
     build_template_plugins,
     generate_air_sim_install_config,
 )
 from nv_config_manager_installer.air_sim.prebuilt_configs import load_prebuilt_config
+from nv_config_manager_installer.air_sim.provider import AirInstallerPackages, AirProviderHooks
 from nv_config_manager_installer.air_sim.sim_config import SimConfig
+from nv_config_manager_installer.providers.api import AirContribution
+from nv_config_manager_installer.providers.nautobot.air import (
+    LAUNCH_STATUS,
+    NautobotAirHooks,
+    build_content_jobs,
+)
+from nv_config_manager_installer.schema import NVConfigManagerInstallConfig
+from nv_config_manager_installer.secrets import generate_secrets
 
 
 def test_install_config_uses_mock_topology_with_paired_template_plugin() -> None:
@@ -46,6 +55,7 @@ def test_install_config_uses_mock_topology_with_paired_template_plugin() -> None
         cfg,
         site_name="air-demo",
         lb_allowed_prefixes=["172.18.255.0/24"],
+        provider_hooks=NautobotAirHooks(),
     )
 
     content = install_config["content"]
@@ -56,14 +66,58 @@ def test_install_config_uses_mock_topology_with_paired_template_plugin() -> None
             )
         }
     ]
-    assert content["jobs"] == [{"path": f"{CONFIG_MANAGER_REMOTE_DIR}/development/mock_topology"}]
-    assert content["run_after_deploy"] == [
+    dcim = install_config["dcim"]
+    assert dcim["provider"] == "nautobot-2x"
+    assert dcim["local"] is True
+    assert dcim["settings"]["jobs"] == [
+        {"path": f"{CONFIG_MANAGER_REMOTE_DIR}/development/mock_topology"}
+    ]
+    assert dcim["settings"]["run_after_deploy"] == [
         {
             "job": "custom.mock_topology.jobs.mock_topology_design.MockTopologyDesign",
             "input": json.dumps({"blueprint": "air_trial", "deployment_name": "demo"}),
         }
     ]
+    assert "nautobot" not in install_config["services"]
     assert "ingest" not in json.dumps(content).lower()
+
+
+def test_install_config_without_provider_hooks_has_no_settings() -> None:
+    cfg = SimConfig(mock_blueprint="air_trial", deployment_name="demo")
+
+    install_config = generate_air_sim_install_config(
+        cfg, site_name="air-demo", lb_allowed_prefixes=[]
+    )
+
+    assert install_config["dcim"] == {"provider": "nautobot-2x", "local": True}
+    assert "k8s" not in install_config["secrets"]
+
+
+class _SeedingHooks(AirProviderHooks):
+    def install_secrets(self, cfg: SimConfig) -> dict[str, dict[str, str]]:
+        return {"dcim": {"token": "shared-token"}, "nats": {"password": "sharedNatsPassword1"}}
+
+
+def test_install_config_carries_provider_seeded_secret_values() -> None:
+    cfg = SimConfig(mock_blueprint="air_trial", deployment_name="demo")
+
+    install_config = generate_air_sim_install_config(
+        cfg, site_name="air-demo", lb_allowed_prefixes=[], provider_hooks=_SeedingHooks()
+    )
+
+    assert install_config["secrets"]["method"] == "kubernetes"
+    assert install_config["secrets"]["k8s"] == {
+        "dcim": {"values": {"token": "shared-token"}},
+        "nats": {"values": {"password": "sharedNatsPassword1"}},
+    }
+    # Only providers that use the core dcim and nats groups read these values.
+    install_config["dcim"] = {
+        "provider": "synthetic",
+        "local": False,
+        "server": "https://dcim.example.com",
+    }
+    loaded = NVConfigManagerInstallConfig.model_validate(install_config)
+    assert generate_secrets(loaded)["nats_password"] == "sharedNatsPassword1"
 
 
 def test_build_content_jobs_appends_extra_jobs() -> None:
@@ -227,3 +281,35 @@ def test_internal_air_deploy_command_uses_default_numpy_wheel_path() -> None:
 
     assert "uv run --python 3.13" in command
     assert "NVCM_NUMPY_FROM_SOURCE" not in command
+
+
+def test_air_deploy_command_has_no_overlay_without_provider_packages() -> None:
+    command = build_deploy_command(SimConfig(), AirInstallerPackages())
+
+    assert "--with" not in command
+    assert "--find-links" not in command
+
+
+def test_air_deploy_command_layers_provider_packages_onto_the_installer() -> None:
+    packages = AirInstallerPackages(
+        requirements=("example-provider",),
+        find_links=("/home/nvcm/provider wheels",),
+    )
+    command = build_deploy_command(SimConfig(), packages)
+
+    overlay = " --find-links '/home/nvcm/provider wheels' --with example-provider "
+    assert overlay in command
+    assert command.index(overlay) < command.index(" nv-config-manager-installer deploy ")
+
+
+class _StrictAirSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    image_tag: str = ""
+
+
+def test_air_contribution_rejects_unknown_dcim_settings() -> None:
+    air = AirContribution(launch_status=LAUNCH_STATUS, settings_model=_StrictAirSettings)
+
+    assert "dcim_settings is invalid" in air.validate_config(SimConfig(dcim_settings={"x": 1}))
+    assert air.validate_config(SimConfig(dcim_settings={"image_tag": "1.0"})) == ""

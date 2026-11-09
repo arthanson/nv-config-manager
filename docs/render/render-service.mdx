@@ -58,7 +58,7 @@ The application uses three fixed durable names in every deployment:
 | :----------- | :------------- | :--------------- |
 | `externalServices.nats.streams.configManager` | `nv-config-manager` | `nv-config-manager-device` |
 | `externalServices.nats.streams.configManager.archiveConsumer` | `nv-config-manager` | `nv-config-manager-archive` |
-| `externalServices.nats.streams.nautobot` | `nautobot` | `nv-config-manager-nautobot` |
+| `externalServices.nats.streams.dcim` | `nautobot` | `nv-config-manager-nautobot` |
 
 Each stream also has an `apiPrefix` value. Its default, `$JS.API`, addresses JetStream in the connected account directly. Override it when the stream belongs to another NATS account and its JetStream API service export is imported under a different local subject prefix. For example:
 
@@ -68,11 +68,11 @@ externalServices:
     streams:
       configManager:
         apiPrefix: $JS.API
-      nautobot:
+      dcim:
         apiPrefix: $JS.IMPORTED.API
 ```
 
-The prefix is configured per stream because the Config Manager stream can remain local while the Nautobot event stream is imported from another account. It is a local routing prefix, not a stream or consumer name. The NATS user permissions and account service imports must refer to the selected prefix.
+The prefix is configured per stream because the Config Manager stream can remain local while the DCIM event stream is imported from another account. It is a local routing prefix, not a stream or consumer name. The NATS user permissions and account service imports must refer to the selected prefix.
 
 For each render pull-consumer `<prefix>`, `<stream>`, and `<consumer>` tuple, the application account needs these consumer subjects:
 

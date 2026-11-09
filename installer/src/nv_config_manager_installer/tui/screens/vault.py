@@ -26,6 +26,8 @@ from textual.widgets import Button, Input, Label, RadioButton, RadioSet
 
 from nv_config_manager_installer.k8s import K8sClient
 from nv_config_manager_installer.openbao import OpenBaoClient, OpenBaoError
+from nv_config_manager_installer.providers.api import DCIMInstallerProvider
+from nv_config_manager_installer.providers.registry import installed_provider, provider_display_name
 from nv_config_manager_installer.schema import (
     GitTokenEntry,
     K8sSecretGroup,
@@ -34,18 +36,19 @@ from nv_config_manager_installer.schema import (
     SiteConfig,
     VaultAuthMethod,
     VaultPathConfig,
-    VaultPathsConfig,
+    database_secret_keys,
 )
+from nv_config_manager_installer.secrets import uses_core_dcim_groups, vault_path_groups
 from nv_config_manager_installer.tui.widgets import LabeledSwitch
 
-# Ordered list of vault path groups to display in the TUI.
+# Ordered list of core vault path groups to display in the TUI.
 # (schema_field, display_label)
-_PATH_GROUPS: list[tuple[str, str]] = [
-    ("nautobot", "Nautobot"),
+_CORE_PATH_GROUPS: list[tuple[str, str]] = [
+    ("dcim", "DCIM API Token"),
+    ("nats", "NATS"),
     ("redis", "Redis"),
     ("postgres", "PostgreSQL"),
     ("network", "Network/Device Creds"),
-    ("nautobot_app", "Nautobot App (admin/django)"),
     ("oidc", "OIDC / SSO"),
     ("redfish", "Redfish Credentials"),
     ("bmc", "BMC Credentials JSON"),
@@ -55,22 +58,27 @@ _PATH_GROUPS: list[tuple[str, str]] = [
     ("ztp_s3", "ZTP S3"),
 ]
 
-_DEFAULTS = VaultPathsConfig()
 _LABEL_API_TOKEN = "API Token"
 _VAULT_PRESENT_SENTINEL = "vault-value-present"
 
-# Writable secret values shared by Kubernetes and Vault modes.
-_K8S_GROUPS: list[tuple[str, str, bool, list[tuple[str, str]]]] = [
+# Writable secret values shared by Kubernetes and Vault modes. Provider groups
+# are placed by ``SecretGroupSpec.after``; the generic ``dcim``/``nats`` cards are
+# shown only for providers that do not declare their own credential groups.
+_CORE_K8S_GROUPS: list[tuple[str, str, bool, list[tuple[str, str]]]] = [
     (
-        "nautobot",
-        "Nautobot",
+        "dcim",
+        "DCIM",
         False,
         [
             ("token", _LABEL_API_TOKEN),
-            ("readOnlyToken", "Read-only API Token"),
-            ("natsPassword", "NATS Password"),
-            ("natsSysPassword", "NATS System Password"),
-            ("natsNautobotPassword", "NATS Nautobot Password"),
+        ],
+    ),
+    (
+        "nats",
+        "NATS",
+        False,
+        [
+            ("password", "Password"),
         ],
     ),
     (
@@ -94,18 +102,6 @@ _K8S_GROUPS: list[tuple[str, str, bool, list[tuple[str, str]]]] = [
             ("configStorePassword", "Config Store Password"),
             ("dhcpUser", "DHCP User"),
             ("dhcpPassword", "DHCP Password"),
-            ("nautobotUser", "Nautobot DB User"),
-            ("nautobotPassword", "Nautobot DB Password"),
-        ],
-    ),
-    (
-        "nautobot_app",
-        "Nautobot App",
-        False,
-        [
-            ("adminPassword", "Admin Password"),
-            ("djangoSecretKey", "Django Secret Key"),
-            ("superuserApiToken", "Superuser API Token"),
         ],
     ),
     (
@@ -155,7 +151,67 @@ _K8S_GROUPS: list[tuple[str, str, bool, list[tuple[str, str]]]] = [
     ),
 ]
 
-_SECRET_VALUE_FIELDS = {field_name: keys for field_name, _label, _optional, keys in _K8S_GROUPS}
+
+_K8sGroup = tuple[str, str, bool, list[tuple[str, str]]]
+_PathGroup = tuple[str, str, dict[str, str]]
+
+
+def _database_fields(database: str) -> list[tuple[str, str]]:
+    user_key, password_key = database_secret_keys(database)
+    label = database.replace("_", " ").title()
+    return [(user_key, f"{label} DB User"), (password_key, f"{label} DB Password")]
+
+
+def _place[T](core: list[tuple[str, T]], provider: list[tuple[str, T]]) -> list[T]:
+    """Interleave provider cards after the core group each names ("" = first)."""
+    known = {name for name, _item in core}
+    placed = [item for after, item in provider if after == ""]
+    for name, item in core:
+        placed.append(item)
+        placed.extend(p_item for after, p_item in provider if after == name)
+    placed.extend(item for after, item in provider if after and after not in known)
+    return placed
+
+
+def k8s_groups(provider: DCIMInstallerProvider | None) -> list[_K8sGroup]:
+    """Return ``(field, label, optional, fields)`` cards for core and provider groups."""
+    provider_groups = list(provider.secrets.groups) if provider is not None else []
+    databases = tuple(provider.secrets.databases) if provider is not None else ()
+    core_dcim = uses_core_dcim_groups(provider)
+    core: list[tuple[str, _K8sGroup]] = []
+    for field_name, label, optional, fields in _CORE_K8S_GROUPS:
+        if field_name in {"dcim", "nats"} and not core_dcim:
+            continue
+        if field_name == "postgres":
+            fields = [*fields, *(f for db in databases for f in _database_fields(db))]
+        core.append((field_name, (field_name, label, optional, list(fields))))
+    extra: list[tuple[str, _K8sGroup]] = [
+        (
+            spec.after if spec.k8s_after is None else spec.k8s_after,
+            (spec.name, spec.k8s_label or spec.label, spec.optional, list(spec.fields)),
+        )
+        for spec in provider_groups
+    ]
+    return _place(core, extra)
+
+
+def path_groups(provider: DCIMInstallerProvider | None) -> list[_PathGroup]:
+    """Return ``(field, label, default_keys)`` vault path cards for core and provider groups."""
+    defaults = (
+        {field: keys for field, _helm_key, _suffix, keys in vault_path_groups(provider)}
+        if provider is not None
+        else {}
+    )
+    provider_groups = list(provider.secrets.groups) if provider is not None else []
+    core: list[tuple[str, _PathGroup]] = [
+        (field_name, (field_name, label, dict(defaults.get(field_name, {}))))
+        for field_name, label in _CORE_PATH_GROUPS
+        if field_name not in {"dcim", "nats"} or uses_core_dcim_groups(provider)
+    ]
+    extra: list[tuple[str, _PathGroup]] = [
+        (spec.after, (spec.name, spec.label, dict(spec.keys))) for spec in provider_groups
+    ]
+    return _place(core, extra)
 
 
 class _K8sSecretCard(Vertical):
@@ -352,6 +408,7 @@ class _VaultPathCard(Vertical):
         field_name: str,
         label: str,
         pc: VaultPathConfig,
+        default_keys: dict[str, str],
         value_group: K8sSecretGroup | None = None,
         value_fields: list[tuple[str, str]] | None = None,
     ) -> None:
@@ -359,7 +416,7 @@ class _VaultPathCard(Vertical):
         self._field_name = field_name
         self._label = label
         self._pc = pc
-        self._default_pc: VaultPathConfig = getattr(_DEFAULTS, field_name)
+        self._default_pc = VaultPathConfig(keys=default_keys)
         self._value_group = value_group
         self._value_fields = value_fields or []
 
@@ -452,7 +509,7 @@ class _VaultPathCard(Vertical):
             enabled = self.query_one(f"#vp-enabled-{fn}", LabeledSwitch).value
             path = self.query_one(f"#vp-path-{fn}", Input).value
         except Exception:
-            return getattr(_DEFAULTS, fn)
+            return self._default_pc.model_copy(deep=True)
 
         effective_keys = self._default_pc.keys.copy()
         for key_name in effective_keys:
@@ -503,9 +560,25 @@ class _VaultPathCard(Vertical):
 class SecretsScreen(Container):
     """Secrets management: method (ESO vs kubernetes), Vault settings, git tokens."""
 
-    def __init__(self, config: NVConfigManagerInstallConfig, **kwargs: object) -> None:
+    PROVIDER_DEPENDENT = True
+
+    def __init__(
+        self,
+        config: NVConfigManagerInstallConfig,
+        provider: DCIMInstallerProvider | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
         self._config = config
+        self._provider = provider if provider is not None else installed_provider(config)
+        self._k8s_groups = k8s_groups(self._provider)
+        self._path_groups = path_groups(self._provider)
+        self._path_suffixes = (
+            {field: suffix for field, _helm_key, suffix, _keys in vault_path_groups(self._provider)}
+            if self._provider is not None
+            else {}
+        )
+        self._value_fields = {field: keys for field, _l, _o, keys in self._k8s_groups}
 
     @property
     def _eso_mode(self) -> bool:
@@ -544,9 +617,8 @@ class SecretsScreen(Container):
                 "exist are never overwritten. "
                 "Enable optional integrations (Slack, Jira, CNPG Backup) to configure their credentials."
             )
-            for field_name, label, optional, keys in _K8S_GROUPS:
-                grp: K8sSecretGroup = getattr(s.k8s, field_name)
-                yield _K8sSecretCard(field_name, label, optional, keys, grp)
+            for field_name, label, optional, keys in self._k8s_groups:
+                yield _K8sSecretCard(field_name, label, optional, keys, s.k8s.group(field_name))
 
         with Container(id="vault-fields"):
             yield Label("Vault Server", classes="field-label")
@@ -622,11 +694,11 @@ class SecretsScreen(Container):
             )
 
             paths_cfg = s.vault.paths
-            for field_name, label in _PATH_GROUPS:
-                pc: VaultPathConfig = getattr(paths_cfg, field_name)
-                value_fields = _SECRET_VALUE_FIELDS.get(field_name)
-                value_group = getattr(s.k8s, field_name) if value_fields else None
-                yield _VaultPathCard(field_name, label, pc, value_group, value_fields)
+            for field_name, label, default_keys in self._path_groups:
+                pc = paths_cfg.group(field_name)
+                value_fields = self._value_fields.get(field_name)
+                value_group = s.k8s.group(field_name) if value_fields else None
+                yield _VaultPathCard(field_name, label, pc, default_keys, value_group, value_fields)
 
             yield Label("")
             yield Label("Site Vault Paths", classes="section-title")
@@ -642,7 +714,7 @@ class SecretsScreen(Container):
         yield Label("Git Repository Tokens", classes="section-title")
         yield Label("─" * 40, classes="section-divider")
         yield Label(
-            "Tokens for Nautobot git repository sync (e.g. Prismo). "
+            f"Tokens for {provider_display_name(self._config)} git repository sync (e.g. Prismo). "
             "Each is written to a Kubernetes Secret or its configured Vault path.",
         )
         yield Button("+ Add Git Token", id="add-gt", classes="add-button")
@@ -684,9 +756,9 @@ class SecretsScreen(Container):
         """Push current config values into existing vault path widgets."""
         paths_cfg = self._config.secrets.vault.paths
         for card in self.query(_VaultPathCard):
-            pc: VaultPathConfig = getattr(paths_cfg, card._field_name)
+            pc = paths_cfg.group(card._field_name)
             value_group = (
-                getattr(self._config.secrets.k8s, card._field_name)
+                self._config.secrets.k8s.group(card._field_name)
                 if card._value_group is not None
                 else None
             )
@@ -700,8 +772,7 @@ class SecretsScreen(Container):
 
     def _sync_k8s_secret_values(self) -> None:
         for card in self.query(_K8sSecretCard):
-            grp: K8sSecretGroup = getattr(self._config.secrets.k8s, card._field_name)
-            card.sync_values(grp)
+            card.sync_values(self._config.secrets.k8s.group(card._field_name))
 
     # --- Site Vault Paths (ESO only) ---
 
@@ -851,16 +922,16 @@ class SecretsScreen(Container):
             )
             presence: dict[str, set[str]] = {}
             environment = self._config.cluster.environment
-            for field_name, _label in _PATH_GROUPS:
-                value_fields = _SECRET_VALUE_FIELDS.get(field_name)
+            for field_name, _label, default_keys in self._path_groups:
+                value_fields = self._value_fields.get(field_name)
                 if not value_fields:
                     continue
-                path_config: VaultPathConfig = getattr(vault.paths, field_name)
+                path_config = vault.paths.group(field_name)
                 if not path_config.enabled:
                     continue
-                default_keys = getattr(_DEFAULTS, field_name).keys
                 key_mapping = {**default_keys, **path_config.keys}
-                path = path_config.path or f"{environment}/{field_name.replace('_', '-')}"
+                suffix = self._path_suffixes.get(field_name, field_name.replace("_", "-"))
+                path = path_config.path or f"{environment}/{suffix}"
                 data, _version = client.read_secret(vault.secrets_path, path)
                 presence[field_name] = {
                     logical_name

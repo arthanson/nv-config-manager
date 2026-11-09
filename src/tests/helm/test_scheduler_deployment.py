@@ -261,11 +261,11 @@ def test_non_nautobot_default_renders_no_scheduler_deployment() -> None:
     assert _scheduler_deployment(_render(*_NON_NAUTOBOT)) is None
 
 
-def test_non_nautobot_plugin_scheduler_runs_without_nautobot_wait() -> None:
+def test_non_nautobot_plugin_scheduler_runs_without_dcim_wait() -> None:
     deployment = _scheduler_deployment(_render(*_NON_NAUTOBOT, f"{_FIXTURE_ENABLED}=true"))
 
     assert _selected_schedulers(deployment) == "fixture.cleanup"
-    assert "wait-for-nautobot" not in _init_container_names(deployment)
+    assert "wait-for-dcim" not in _init_container_names(deployment)
 
 
 def test_builtin_backup_can_be_disabled_while_plugin_schedulers_run() -> None:
@@ -276,7 +276,7 @@ def test_builtin_backup_can_be_disabled_while_plugin_schedulers_run() -> None:
     )
 
     assert _selected_schedulers(deployment) == "fixture.cleanup"
-    assert "wait-for-nautobot" not in _init_container_names(deployment)
+    assert "wait-for-dcim" not in _init_container_names(deployment)
 
 
 def test_no_selected_schedulers_renders_no_scheduler_deployment() -> None:
@@ -313,15 +313,26 @@ def test_null_requirement_removes_the_builtin_provider_rule() -> None:
     """A null requirement deletes the default, so Helm selects builtin.backup.
 
     The scheduler host is provider-neutral, so it then runs builtin.backup against
-    the configured DCIM provider rather than skipping it.
+    the configured DCIM provider rather than skipping it, and waits for it.
     """
-    deployment = _scheduler_deployment(_render(*_NON_NAUTOBOT, f"{_BACKUP_REQUIREMENT}=null"))
+    deployment = _scheduler_deployment(
+        _render(*_NON_NAUTOBOT, f"{_BACKUP_REQUIREMENT}=null", "dcim.readiness.path=/login/")
+    )
 
     assert _selected_schedulers(deployment) == "builtin.backup"
-    assert "wait-for-nautobot" not in _init_container_names(deployment)
+    assert "wait-for-dcim" in _init_container_names(deployment)
 
 
-def test_null_requirement_keeps_the_nautobot_wait_for_builtin_backup() -> None:
+def test_disabled_dcim_readiness_drops_the_builtin_wait() -> None:
+    deployment = _scheduler_deployment(
+        _render(*_NON_NAUTOBOT, f"{_BACKUP_REQUIREMENT}=null", "dcim.readiness.enabled=false")
+    )
+
+    assert _selected_schedulers(deployment) == "builtin.backup"
+    assert "wait-for-dcim" not in _init_container_names(deployment)
+
+
+def test_null_requirement_keeps_the_dcim_wait_for_builtin_backup() -> None:
     # The wait follows the built-in DCIM dependency, not the selection requirement.
     deployment = _scheduler_deployment(_render(f"{_BACKUP_REQUIREMENT}=null"))
 
